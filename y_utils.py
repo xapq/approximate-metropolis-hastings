@@ -1,0 +1,95 @@
+import torch
+
+
+def colorbar(mappable):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    import matplotlib.pyplot as plt
+    last_axes = plt.gca()
+    ax = mappable.axes
+    fig = ax.figure
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+    cbar = fig.colorbar(mappable, cax=cax)
+    plt.sca(last_axes)
+    return cbar
+
+
+def print_tensors_on_gpu():
+    import gc
+
+    def human_readable_size(size, decimal_places=2):
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if size < 1024.0:
+                break
+            size /= 1024.0
+        return f"{size:.{decimal_places}f} {unit}"
+    
+    def tensor_size_in_bytes(tensor):
+        return tensor.element_size() * tensor.nelement()
+    
+    # List to hold tuples of (tensor size in bytes, tensor object)
+    tensors_on_gpu = []
+    
+    # Iterate over all objects, filter for tensors on the GPU
+    for obj in gc.get_objects():
+        try:
+            if torch.is_tensor(obj) and obj.is_cuda:
+                # Add tensor and its size to the list
+                tensors_on_gpu.append((tensor_size_in_bytes(obj), obj))
+            elif hasattr(obj, 'data') and torch.is_tensor(obj.data) and obj.data.is_cuda:
+                # Handle nn.Parameter and similar types
+                tensors_on_gpu.append((tensor_size_in_bytes(obj.data), obj.data))
+        except:
+            pass
+    
+    # Sort the list of tensors by size in descending order
+    tensors_on_gpu.sort(key=lambda x: x[0], reverse=True)
+    
+    # Print the sorted list of tensors
+    print('Tensors on GPU (shape, size):')
+    for size, tensor in tensors_on_gpu:
+        print(f"({list(tensor.shape)},\t{human_readable_size(size)})",  end='\n')
+
+
+def to_numpy(x):
+    return x.detach().cpu().numpy()
+
+
+# For passing as an argument to matplotlib.pyplot.scatter
+def pl(x):
+    return x.T.detach().cpu().numpy()
+
+
+def log_sum_exp(x):
+    x_max = torch.max(x)
+    return torch.log(torch.sum(torch.exp((x - x_max).to(torch.float64)))) + x_max
+
+
+class Normalizer:
+    def __init__(self):
+        self.mean = None
+        self.std = None
+
+    def fit(self, data):
+        self.mean = torch.mean(data, dim=0)
+        self.std = torch.std(data, dim=0)
+
+    def transform(self, data):
+        if self.mean is None or self.std is None:
+            raise ValueError("fit method must be called before transform")
+        return (data - self.mean) / self.std
+
+    def inverse_transform(self, normalized_data):
+        if self.mean is None or self.std is None:
+            raise ValueError("fit method must be called before inverse_transform")
+        return normalized_data * self.std + self.mean
+
+    def fit_transform(self, data):
+        self.fit(data)
+        return self.transform(data)
+
+
+def normal_density_log(mean, std_dev, x):
+    normal_dist = torch.distributions.MultivariateNormal(mean, torch.diag_embed(std_dev ** 2))
+    log_density = normal_dist.log_prob(x)
+    return log_density
