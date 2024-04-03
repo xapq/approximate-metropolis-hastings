@@ -215,7 +215,7 @@ class VAE(torch.nn.Module):
         torch.save(save_dict, filename)
 
     def load_knowledge(self, filename):
-        checkpoint = torch.load(filename)
+        checkpoint = torch.load(filename, map_location=self.device)
         self.load_state_dict(checkpoint['model_state_dict'])
         self.latent_mean = checkpoint['latent_mean']
         self.latent_std = checkpoint['latent_std']

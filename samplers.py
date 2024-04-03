@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.stats import bernoulli
 import torch
+import numbers
+
 
 # Returns acceptance rate and samples
 def metropolis_hastings_with_noise(target, proposal, n_samples, burn_in=100, noise_std=0):
@@ -25,27 +27,52 @@ def metropolis_hastings_with_noise(target, proposal, n_samples, burn_in=100, noi
     return acc_rate, samples[burn_in:].numpy(force=True)
 
 
-def approximate_metropolis_hastings(target, proposer, proposal_log_prob_estimator, n_samples, burn_in=None):
+def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1):
+    '''
+    Parameters
+    ----------
+    target : torch.distribution
+        Target distribution
+    proposal_samples : torch.tensor
+        Samples from the proposal distribution
+    proposal_log_prob_estimator : function
+        Function estimating log-probability of objects under the proposal distribution
+    burn_in : positive integer
+        Number of MH samples to discard from the beginning. 1/10th of the proposal samples by default
+    n_estimate : positive integer
+        Number of times to evaluate the proposal log-probability estimate.
+    Returns
+    -------
+    float
+        Acceptance rate
+    1d integer torch.tensor
+        Indicies of proposal samples chosen by the Metropolis-Hastings algorithm
+    '''
+    n_samples = proposal_samples.shape[0]
     if burn_in is None:
-        burn_in = n_samples // 10 
-    n_samples += burn_in
-
-    samples = proposer((n_samples,))
-    target_log_prob = target.log_prob(samples)
-    proposal_log_prob = proposal_log_prob_estimator(samples)
+        burn_in = n_samples // 10
+    sample_indicies = torch.arange(n_samples)
+    target_log_prob = target.log_prob(proposal_samples)
+    proposal_log_probs = torch.stack([proposal_log_prob_estimator(proposal_samples) for _ in range(n_estimates)], dim=-1)    
     acc_noise = torch.rand(n_samples)
     n_accepted = 0
+    est_index = 0
+    
     for t in range(1, n_samples):
+        index_last = sample_indicies[t - 1]
+        cur_proposal_log_prob = proposal_log_probs[t][est_index]
+        last_proposal_log_prob = proposal_log_probs[index_last][est_index]
         accept_prob = torch.exp(
-            target_log_prob[t] - target_log_prob[t - 1] + proposal_log_prob[t - 1] - proposal_log_prob[t]
+            target_log_prob[t] - target_log_prob[index_last] + last_proposal_log_prob - cur_proposal_log_prob
         )
         if acc_noise[t] < accept_prob:  # accept
             n_accepted += (t >= burn_in)
         else:  # reject
-            for arr in (samples, target_log_prob, proposal_log_prob):
-                arr[t] = arr[t - 1]  # copy previous sample
+            sample_indicies[t] = index_last
+        est_index = (est_index + 1) % n_estimates
+    
     acc_rate = n_accepted / (n_samples - burn_in)
-    return acc_rate, samples[burn_in:]
+    return acc_rate, sample_indicies[burn_in:]
 
 
 def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_prob_estimator, n_samples, burn_in=None):
@@ -69,7 +96,7 @@ def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_
             target_log_prob[t] = target_log_prob[t - 1]
             proposal_log_prob[t] = proposal_log_prob_estimator(samples[t])
     acc_rate = n_accepted / (n_samples - burn_in)
-    return acc_rate, samples[burn_in:]
+    return acc_rate, samples_indicies[burn_in:]
 
 
 def approximate_metropolis_hastings_multiple_estimates(target, proposer, proposal_log_prob_estimator, n_estimates, n_samples, burn_in=None):
@@ -80,15 +107,14 @@ def approximate_metropolis_hastings_multiple_estimates(target, proposer, proposa
     samples = proposer((n_samples,))
     sample_indicies = torch.arange(n_samples)
     target_log_prob = target.log_prob(samples)
-    proposal_log_prob_estimates = torch.stack([proposal_log_prob_estimator(samples) for _ in range(n_estimates)], axis=4)
-    print(proposal_log_prob_estimates.shape)
-    est_index = 0
+    proposal_log_prob_estimates = torch.stack([proposal_log_prob_estimator(samples) for _ in range(n_estimates)], dim=-1)
+    est_index = 0  # number of the estimate to use
     acc_noise = torch.rand(n_samples)
     n_accepted = 0
     for t in range(1, n_samples):
         last = sample_indicies[t - 1]
-        proposal_log_prob_cur = proposal_log_prob_estimates[t][est_index]
-        proposal_log_prob_last = proposal_log_prob_estimates[last][est_index]
+        cur_proposal_log_prob = proposal_log_prob_estimates[t][est_index]
+        last_proposal_log_prob = proposal_log_prob_estimates[last][est_index]
         accept_prob = torch.exp(
             target_log_prob[t] - target_log_prob[last] + proposal_log_prob_last - proposal_log_prob_cur
         )
@@ -96,6 +122,6 @@ def approximate_metropolis_hastings_multiple_estimates(target, proposer, proposa
             n_accepted += (t >= burn_in)
         else:  # reject
             sample_indicies[t] = sample_indicies[t - 1]
-        est_index = (estimate_index + 1) % n_estimates
+        est_index = (est_index + 1) % n_estimates
     acc_rate = n_accepted / (n_samples - burn_in)
     return acc_rate, samples[sample_indicies[burn_in:]]
