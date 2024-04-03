@@ -181,16 +181,17 @@ class VAE(torch.nn.Module):
         self.std_factor = std_factor
         self.latent_sampling_distribution = torch.distributions.MultivariateNormal(self.latent_mean, self.latent_std.diag() * std_factor ** 2)
 
-    # n_outliers -- amount of highest and lowest point estimates not taken into account
-    def iw_log_marginal_estimate(self, x, L, batch_L=64):
+    # beta -- smoothing constant for log-sum-exp
+    def iw_log_marginal_estimate(self, x, L, beta=1, batch_L=64):
         point_estimates = []
         for i in range(0, L, batch_L):
             point_estimates.append(self.__iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
         point_estimates = torch.cat(point_estimates)
+        
         # log-sum-exp trick
         #point_estimates, indicies = torch.sort(point_estimates, dim=0)
         #point_estimates = point_estimates[n_outliers : L - n_outliers]
-        estimate = torch.logsumexp(point_estimates.type(torch.DoubleTensor), dim=0) - np.log(point_estimates.shape[0])
+        estimate = (torch.logsumexp(point_estimates.double() / beta, dim=0) - np.log(point_estimates.shape[0])) * beta
         #max_est = torch.max(point_estimates)
         #estimate = (point_estimates - max_est).to(torch.float64).exp().mean(dim=0).log() + max_est
         return estimate
