@@ -40,7 +40,7 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     proposal_log_prob_estimator : function
         Function estimating log-probability of objects under the proposal distribution
     burn_in : positive integer
-        Number of initial MH samples to discard. 1/10th of theg samples by default
+        Number of initial MH samples to discard. 1/20th of the samples by default
     n_estimates : positive integer
         Number of times to evaluate the proposal log-probability estimate.
     Returns
@@ -52,7 +52,7 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     '''
     n_samples = proposal_samples.shape[0]
     if burn_in is None:
-        burn_in = n_samples // 10
+        burn_in = n_samples // 20
     sample_indicies = torch.arange(n_samples)
     target_log_prob = target.log_prob(proposal_samples)
     proposal_log_probs = torch.stack([proposal_log_prob_estimator(proposal_samples) for _ in range(n_estimates)], dim=-1)    

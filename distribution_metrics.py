@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 import jax
+import torch
 import numpy as np
 from jax import numpy as jnp
 from scipy.stats import gaussian_kde
@@ -62,20 +63,20 @@ def create_random_2d_projection(
 
 
 def average_total_variation(
-#    key: jnp.ndarray,
-    true: jnp.ndarray,
-    other: jnp.ndarray,
-    n_samples: int,
-    n_steps: int,
+    true: torch.tensor,
+    other: torch.tensor,
+    n_1d_samples: int,
+    n_projections: int,
 ) -> MeanTracker:
+    true = to_jax(true)
+    other = to_jax(other)
+    
     tracker = MeanTracker()
     key = jax.random.PRNGKey(0)
-    keys = jax.random.split(key, n_steps)
-
-#    for b in range(other.shape[1]):  # for multiple chains? idk 
-    for i in trange(n_steps, leave=False):
-        tracker.update(total_variation(keys[i], true, other, n_samples))  # [:, b]
-    # return tracker
+    keys = jax.random.split(key, n_projections)
+    # for b in range(other.shape[1]):  # for multiple chains? idk 
+    for i in range(n_projections):  # can use trange
+        tracker.update(total_variation(keys[i], true, other, n_1d_samples))  # [:, b]
     return tracker.mean()
 
 
@@ -83,24 +84,24 @@ def total_variation(
     key: jnp.ndarray,
     xs_true: jnp.ndarray,
     xs_pred: jnp.ndarray,
-    n_samples: int,
+    n_1d_samples: int,
 ):
     proj = create_random_projection(key, xs_true)
     return total_variation_1d(
         proj.project(xs_true),
         proj.project(xs_pred),
-        n_samples,
+        n_1d_samples,
     )
 
 
-def total_variation_1d(xs_true, xs_pred, n_samples):
+def total_variation_1d(xs_true, xs_pred, n_1d_samples):
     true_density = gaussian_kde(xs_true)
     pred_density = gaussian_kde(xs_pred)
 
     x_min = min(xs_true.min(), xs_pred.min())
     x_max = max(xs_true.max(), xs_pred.max())
 
-    points = np.linspace(x_min, x_max, n_samples)
+    points = np.linspace(x_min, x_max, n_1d_samples)
 
     return (
         0.5
@@ -109,22 +110,27 @@ def total_variation_1d(xs_true, xs_pred, n_samples):
     )
 
 
+# torch.tensor to jax.numpy.ndarray
+def to_jax(tensor: torch.tensor):
+    return jnp.array(tensor.detach().cpu().numpy())
+
+
 # def average_emd(
-#     key: jnp.ndarray, true: jnp.ndarray, other: jnp.ndarray, n_samples: int, n_steps: int
+#     key: jnp.ndarray, true: jnp.ndarray, other: jnp.ndarray, n_1d_samples: int, n_projections: int
 # ) -> MeanTracker:
 #     tracker = MeanTracker()
-#     keys = jax.random.split(key, n_steps)
-#     for i in trange(n_steps, leave=False):
-#         tracker.update(emd_2d(keys[i], true, other, n_samples))
+#     keys = jax.random.split(key, n_projections)
+#     for i in trange(n_projections, leave=False):
+#         tracker.update(emd_2d(keys[i], true, other, n_1d_samples))
 #     return tracker
 
 
-# def emd_2d(key: jnp.ndarray, xs_true: jnp.ndarray, xs_pred: jnp.ndarray, n_samples: int):
+# def emd_2d(key: jnp.ndarray, xs_true: jnp.ndarray, xs_pred: jnp.ndarray, n_1d_samples: int):
 #     proj = create_random_2d_projection(key, xs_true)
-#     return earth_movers_distance_2d(proj.project(xs_true), proj.project(xs_pred), n_samples)
+#     return earth_movers_distance_2d(proj.project(xs_true), proj.project(xs_pred), n_1d_samples)
 
 
-# def earth_movers_distance_2d(xs_true, xs_pred, n_samples):
+# def earth_movers_distance_2d(xs_true, xs_pred, n_1d_samples):
 #     print(xs_true.shape, xs_pred.shape)
 #     M = np.linalg.norm(xs_true[None, :, :] - xs_pred[:, None, :], axis=-1, ord=2)**2
 #     emd = ot.lp.emd2([], [], M)
