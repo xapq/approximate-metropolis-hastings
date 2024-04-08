@@ -93,3 +93,10 @@ def normal_density_log(mean, std_dev, x):
     normal_dist = torch.distributions.MultivariateNormal(mean, torch.diag_embed(std_dev ** 2))
     log_density = normal_dist.log_prob(x)
     return log_density
+
+
+def approximate_with_gaussian(x):
+    mean = x.mean(dim=0)
+    variances = x.var(dim=0, unbiased=True)
+    cov = torch.diag(variances)
+    return torch.distributions.MultivariateNormal(mean, cov)

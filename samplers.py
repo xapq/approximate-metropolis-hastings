@@ -115,3 +115,9 @@ def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_
             proposal_log_prob[t] = proposal_log_prob_estimator(samples[t])
     acc_rate = n_accepted / (n_samples - burn_in)
     return acc_rate, samples_indicies[burn_in:]
+
+
+def log_prob_cutoff_filter(target, cutoff, samples):
+    cut_indicies = target.log_prob(samples) > cutoff
+    acc_rate = cut_indicies.sum() / len(cut_indicies)
+    return acc_rate, cut_indicies
