@@ -79,7 +79,7 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         log_ratios_accepted = (target_log_prob - proposal_log_probs[..., 0])[sample_indicies]
         log_ratios_all = target_log_prob - proposal_log_probs[..., 0]
         ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_accepted.exp()), label='Accepted sample target/proposal', zorder=3)
-        # ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_all.exp()), label='Proposed sample target/proposal')
+        ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_all.exp()), label='Proposed sample target/proposal')
         # ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density', zorder=0)
         ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density')
         ax.plot(np.arange(1, n_samples + 1), to_numpy(proposal_log_probs[..., 0].exp()), label='Sample proposal density', zorder=4)

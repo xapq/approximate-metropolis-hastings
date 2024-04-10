@@ -91,17 +91,21 @@ def total_variation(
         proj.project(xs_true),
         proj.project(xs_pred),
         n_1d_samples,
+        is_input_jax=True
     )
 
 
-def total_variation_1d(xs_true, xs_pred, n_1d_samples):
+def total_variation_1d(xs_true, xs_pred, n_samples=1000, is_input_jax=False):
+    if not is_input_jax:
+        xs_true = to_jax(xs_true)
+        xs_pred = to_jax(xs_pred)
     true_density = gaussian_kde(xs_true)
     pred_density = gaussian_kde(xs_pred)
 
     x_min = min(xs_true.min(), xs_pred.min())
     x_max = max(xs_true.max(), xs_pred.max())
 
-    points = np.linspace(x_min, x_max, n_1d_samples)
+    points = np.linspace(x_min, x_max, n_samples)
 
     return (
         0.5
