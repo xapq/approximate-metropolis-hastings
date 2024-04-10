@@ -6,6 +6,7 @@ import numpy as np
 from jax import numpy as jnp
 from scipy.stats import gaussian_kde
 from tqdm.auto import trange
+import matplotlib.pyplot as plt
 
 
 class MeanTracker:
@@ -67,9 +68,16 @@ def average_total_variation(
     other: torch.tensor,
     n_1d_samples: int,
     n_projections: int,
+    visualize=False
 ) -> MeanTracker:
     true = to_jax(true)
     other = to_jax(other)
+
+    # FOR DEBUGGING ONLY. DO NOT FORGET TO REMOVE THIS PART
+    # n_samples = 3000
+    # true = true[np.random.choice(true.shape[0], n_samples, replace=False)]
+    # other = other[np.random.choice(other.shape[0], n_samples, replace=False)]
+    ###
     
     tracker = MeanTracker()
     key = jax.random.PRNGKey(0)

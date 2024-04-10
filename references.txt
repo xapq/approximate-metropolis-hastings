@@ -1,0 +1,1 @@
+https://openreview.net/pdf?id=aTAP4rQBrAx - Discusses effect of roundoff error in calculating log-densities for MH algorithm. May be useful if it includes some theoretical analysis.
