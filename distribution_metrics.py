@@ -88,6 +88,24 @@ def average_total_variation(
     return tracker.mean()
 
 
+def maximum_total_variation(
+    true: torch.tensor,
+    other: torch.tensor,
+    n_1d_samples: int,
+    n_projections: int,
+    visualize=False
+) -> MeanTracker:
+    true = to_jax(true)
+    other = to_jax(other)
+    
+    key = jax.random.PRNGKey(0)
+    keys = jax.random.split(key, n_projections)
+    # for b in range(other.shape[1]):  # for multiple chains? idk 
+    ans = 0
+    for i in range(n_projections):  # can use trange
+        ans = max(ans, total_variation(keys[i], true, other, n_1d_samples))
+    return ans
+
 def total_variation(
     key: jnp.ndarray,
     xs_true: jnp.ndarray,
