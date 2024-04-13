@@ -9,7 +9,7 @@ from tqdm.auto import trange
 import matplotlib.pyplot as plt
 
 
-class MeanTracker:
+class ValueTracker:
     def __init__(self):
         self.values = []
 
@@ -28,6 +28,9 @@ class MeanTracker:
     def std_of_mean(self) -> float:
         return jnp.std(jnp.array(self.values)) / jnp.sqrt(len(self))
 
+    def max(self):
+        return jnp.max(jnp.array(self.values))
+
     def last(self) -> float:
         return self.values[-1]
 
@@ -45,78 +48,43 @@ def create_random_projection(key: jnp.ndarray, xs: jnp.ndarray) -> Projector:
     x0 = jnp.mean(xs, 0)
     v = jax.random.normal(key, [len(x0)])
     v = v / jnp.linalg.norm(v)
-
     return Projector(x0, v)
 
 
-def create_random_2d_projection(
-    key: jnp.ndarray,
-    xs: jnp.ndarray,
-) -> Projector:
-    x0 = jnp.mean(xs, 0)
-    v = jax.random.normal(key, [len(x0), len(x0)])
-    v = v / jnp.linalg.norm(v)
-
-    print(v.shape)
-
-    return Projector(x0, v)
-
-
-
-def average_total_variation(
+def sliced_total_variation(
     true: torch.tensor,
     other: torch.tensor,
-    n_1d_samples: int,
     n_projections: int,
-    visualize=False
-) -> MeanTracker:
+    n_kde_samples: int,
+    mode='mean',  # can be either 'mean' or 'max'
+) -> ValueTracker:
+    
     true = to_jax(true)
     other = to_jax(other)
-
-    # FOR DEBUGGING ONLY. DO NOT FORGET TO REMOVE THIS PART
-    # n_samples = 3000
-    # true = true[np.random.choice(true.shape[0], n_samples, replace=False)]
-    # other = other[np.random.choice(other.shape[0], n_samples, replace=False)]
-    ###
-    
-    tracker = MeanTracker()
+    tracker = ValueTracker()
     key = jax.random.PRNGKey(0)
     keys = jax.random.split(key, n_projections)
-    # for b in range(other.shape[1]):  # for multiple chains? idk 
     for i in range(n_projections):  # can use trange
-        tracker.update(total_variation(keys[i], true, other, n_1d_samples))  # [:, b]
-    return tracker.mean()
-
-
-def maximum_total_variation(
-    true: torch.tensor,
-    other: torch.tensor,
-    n_1d_samples: int,
-    n_projections: int,
-    visualize=False
-) -> MeanTracker:
-    true = to_jax(true)
-    other = to_jax(other)
+        tracker.update(random_projection_total_variation(keys[i], true, other, n_kde_samples))
     
-    key = jax.random.PRNGKey(0)
-    keys = jax.random.split(key, n_projections)
-    # for b in range(other.shape[1]):  # for multiple chains? idk 
-    ans = 0
-    for i in range(n_projections):  # can use trange
-        ans = max(ans, total_variation(keys[i], true, other, n_1d_samples))
-    return ans
+    if mode == 'mean':
+        return tracker.mean()
+    if mode == 'max':
+        return tracker.max()
+    raise ValueError('Invalid mode')
 
-def total_variation(
+
+def random_projection_total_variation(
     key: jnp.ndarray,
     xs_true: jnp.ndarray,
     xs_pred: jnp.ndarray,
-    n_1d_samples: int,
+    n_kde_samples: int,
 ):
     proj = create_random_projection(key, xs_true)
     return total_variation_1d(
         proj.project(xs_true),
         proj.project(xs_pred),
-        n_1d_samples,
+        n_kde_samples,
         is_input_jax=True
     )
 
@@ -145,22 +113,37 @@ def to_jax(tensor: torch.tensor):
     return jnp.array(tensor.detach().cpu().numpy())
 
 
+'''
+def create_random_2d_projection(
+    key: jnp.ndarray,
+    xs: jnp.ndarray,
+) -> Projector:
+    x0 = jnp.mean(xs, 0)
+    v = jax.random.normal(key, [len(x0), len(x0)])
+    v = v / jnp.linalg.norm(v)
+
+    print(v.shape)
+
+    return Projector(x0, v)
+'''
+
+
 # def average_emd(
-#     key: jnp.ndarray, true: jnp.ndarray, other: jnp.ndarray, n_1d_samples: int, n_projections: int
-# ) -> MeanTracker:
-#     tracker = MeanTracker()
+#     key: jnp.ndarray, true: jnp.ndarray, other: jnp.ndarray, n_kde_samples: int, n_projections: int
+# ) -> ValueTracker:
+#     tracker = ValueTracker()
 #     keys = jax.random.split(key, n_projections)
 #     for i in trange(n_projections, leave=False):
-#         tracker.update(emd_2d(keys[i], true, other, n_1d_samples))
+#         tracker.update(emd_2d(keys[i], true, other, n_kde_samples))
 #     return tracker
 
 
-# def emd_2d(key: jnp.ndarray, xs_true: jnp.ndarray, xs_pred: jnp.ndarray, n_1d_samples: int):
+# def emd_2d(key: jnp.ndarray, xs_true: jnp.ndarray, xs_pred: jnp.ndarray, n_kde_samples: int):
 #     proj = create_random_2d_projection(key, xs_true)
-#     return earth_movers_distance_2d(proj.project(xs_true), proj.project(xs_pred), n_1d_samples)
+#     return earth_movers_distance_2d(proj.project(xs_true), proj.project(xs_pred), n_kde_samples)
 
 
-# def earth_movers_distance_2d(xs_true, xs_pred, n_1d_samples):
+# def earth_movers_distance_2d(xs_true, xs_pred, n_kde_samples):
 #     print(xs_true.shape, xs_pred.shape)
 #     M = np.linalg.norm(xs_true[None, :, :] - xs_pred[:, None, :], axis=-1, ord=2)**2
 #     emd = ot.lp.emd2([], [], M)
