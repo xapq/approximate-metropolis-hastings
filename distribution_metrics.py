@@ -7,6 +7,7 @@ from jax import numpy as jnp
 from scipy.stats import gaussian_kde
 from tqdm.auto import trange
 import matplotlib.pyplot as plt
+import ot
 
 
 class ValueTracker:
@@ -113,19 +114,12 @@ def to_jax(tensor: torch.tensor):
     return jnp.array(tensor.detach().cpu().numpy())
 
 
-'''
-def create_random_2d_projection(
-    key: jnp.ndarray,
-    xs: jnp.ndarray,
-) -> Projector:
-    x0 = jnp.mean(xs, 0)
-    v = jax.random.normal(key, [len(x0), len(x0)])
-    v = v / jnp.linalg.norm(v)
-
-    print(v.shape)
-
-    return Projector(x0, v)
-'''
+def wasserstein_metric(sample1, sample2):
+    a = torch.ones(sample1.shape[0]) / sample1.shape[0]
+    b = torch.ones(sample2.shape[0]) / sample2.shape[0]
+    M = ot.dist(sample1, sample2)
+    gamma, log = ot.emd(a, b, M, log=True, numThreads='max', numItermax=500_000)
+    return log['cost']
 
 
 # def average_emd(
