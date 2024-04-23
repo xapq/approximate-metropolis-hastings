@@ -65,7 +65,7 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         cur_proposal_log_prob = proposal_log_probs[t][est_index]
         last_proposal_log_prob = proposal_log_probs[index_last][est_index]
         accept_prob = torch.exp(
-            target_log_prob[t] - target_log_prob[index_last] + last_proposal_log_prob - cur_proposal_log_prob
+            (target_log_prob[t] - cur_proposal_log_prob) - (target_log_prob[index_last] - last_proposal_log_prob)
         )
         if acc_noise[t] < accept_prob:  # accept
             n_accepted += (t >= burn_in)
@@ -122,7 +122,8 @@ def get_log_prob_quantile(target, q=0, N=2000):
     log_probs = target.log_prob(samples)
     return log_probs.quantile(q).item()
 
-def log_prob_cutoff_filter(target, cutoff, samples):
-    cut_indicies = target.log_prob(samples) > cutoff
+def log_prob_cutoff_filter(target, samples, cutoff_min, cutoff_max=torch.inf):
+    sample_log_prob = target.log_prob(samples)
+    cut_indicies = (cutoff_min < sample_log_prob) & (sample_log_prob < cutoff_max)
     acc_rate = cut_indicies.sum() / len(cut_indicies)
     return acc_rate.item(), cut_indicies

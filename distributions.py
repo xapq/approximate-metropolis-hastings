@@ -452,6 +452,9 @@ class Banana(Distribution):
         self.scale_2d_log_prob = 2.0
         # assert self.dim % 2 == 0, 'Dimension should be divisible by 2'
 
+    def __repr__(self):
+        return f"banana_dim{self.dim}_b{self.b}_sigma{self.sigma}"
+
     def sample(self, size=(1,)):
         even = torch.arange(0, self.dim, 2, device=self.device)
         odd = torch.arange(1, self.dim, 2, device=self.device)
