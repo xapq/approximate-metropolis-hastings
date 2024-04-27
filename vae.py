@@ -7,12 +7,11 @@ from torch.nn import functional as F
 import torch.nn.init as init
 import numpy as np
 import math
-
-
+from samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
-
 from y_utils import *
+
 
 def dataloader_from_tensor(X, batch_size):
     dataset = TensorDataset(X)
@@ -33,6 +32,8 @@ def SequentialFC(dims, activation):
     network = nn.Sequential(nn.Linear(dims[0], dims[1]))
     for i in range(1, len(dims) - 1):
         network.append(activation())
+        network.append(nn.Dropout(p=0.1))
+        network.append(nn.BatchNorm1d(num_features=dims[i]))
         network.append(nn.Linear(dims[i], dims[i + 1]))
     return network        
 
@@ -71,22 +72,36 @@ class VAE(torch.nn.Module):
 
     def __repr__(self):
         return f'y01vae_dim_{self.data_dim}'
-        
-    def fit_distribution(self, target, kl_penalty, N_train, optimizer, scheduler=None, max_epochs=5000, kl_annealing_epochs=1, early_stopping_epochs=1000, batch_size=64):
-        LOSS_THRESHOLD = 1e-4
-        PLOT_INTERVAL = 20
+
+    LOSS_THRESHOLD = 1e-4
+    PLOT_INTERVAL = 20
+    EVALUATE_SAMPLES_INTERVAL = 40
+    
+    def fit_distribution(self, target, kl_penalty, N_train, optimizer, scheduler=None, max_epochs=5000, kl_annealing_epochs=1, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
         N_val = N_train // 10
-        
-        train_losses = []
-        val_losses = []
-        best_val_loss = float('inf')
-        best_model_weights = None
-        lr = optimizer.param_groups[0]['lr']
-        no_improvement_epochs = 0
+        n_eval_samples = min(3000, N_train)
 
         X_train = target.sample((N_train,))
         train_loader = dataloader_from_tensor(X_train, batch_size)
         val_loader = dataloader_from_tensor(target.sample((N_val,)), batch_size)
+
+        # filters & sample score
+        L = 64
+        beta = 1
+        cutoff_quantile = 1e-4
+        model_log_prob_estimator = lambda x : self.iw_log_marginal_estimate(x, L=L, beta=beta, batch_L=32)
+        cutoff_log_prob = target.log_prob(X_train).quantile(cutoff_quantile)
+        sample_score = lambda sample: distribution_metric(X_train[:n_eval_samples], sample)
+        
+        train_losses = []
+        val_losses = []
+        sample_scores = []
+        cut_sample_scores = []
+        mh_sample_scores = []
+        best_val_loss = float('inf')
+        best_model_weights = None
+        lr = optimizer.param_groups[0]['lr']
+        no_improvement_epochs = 0
         
         for epoch in range(1, max_epochs + 1):
             cur_lr = optimizer.param_groups[0]['lr']
@@ -101,12 +116,28 @@ class VAE(torch.nn.Module):
             val_recon_loss, val_kl_div = self.__run_epoch(val_loader, cur_kl_penalty)
             val_loss = val_recon_loss + kl_penalty * val_kl_div
             val_losses.append(val_loss)
+
+            # calculate sample quality
+            if epoch % self.EVALUATE_SAMPLES_INTERVAL == 0:
+                self.eval()
+                latent_train = self.sample_q(X_train)
+                self.latent_mean = torch.mean(latent_train, dim=0)
+                self.latent_std = torch.std(latent_train, dim=0)
+                self.set_std_factor(1)
+                model_samples = self.sample((n_eval_samples,))
+                sample_scores.append(sample_score(model_samples))
+                cut_acc_rate, cut_indicies = log_prob_cutoff_filter(target, model_samples, cutoff_log_prob)
+                cut_samples = model_samples[cut_indicies]
+                cut_sample_scores.append(sample_score(cut_samples))
+                mh_acc_rate, mh_indicies = metropolis_hastings_filter(target, cut_samples, model_log_prob_estimator)
+                mh_samples = cut_samples[mh_indicies]
+                mh_sample_scores.append(sample_score(mh_samples))
     
-            if epoch % PLOT_INTERVAL == 0:
-                self.plot_losses(train_losses, val_losses, lr)
+            if epoch % self.PLOT_INTERVAL == 0:
+                self.plot_losses(train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, lr)
     
             # Autostopping
-            if val_loss < (1 - LOSS_THRESHOLD) * best_val_loss:
+            if val_loss < (1 - self.LOSS_THRESHOLD) * best_val_loss:
                 best_val_loss = val_loss
                 best_model_weights = self.state_dict()
                 no_improvement_epochs = 0
@@ -118,25 +149,31 @@ class VAE(torch.nn.Module):
                 scheduler.step(val_loss)
     
         self.load_state_dict(best_model_weights)
-
-        latent_train = self.sample_q(X_train)
-        self.latent_mean = torch.mean(latent_train, dim=0)
-        self.latent_std = torch.std(latent_train, dim=0)
-        self.set_std_factor(1)
         self.eval()
 
-    def plot_losses(self, train_losses, val_losses, lr, plot_from=50):
-        epoch = len(val_losses)
+    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, lr, plot_from=50):
         clear_output(wait=True)
-        plt.figure(figsize=(10, 5))
+        epoch = len(val_losses)
+        fig, axs = plt.subplots(figsize=(10, 10), nrows=2)
+
+        ax = axs[0]
         epoch_list = np.arange(plot_from, epoch + 1)
-        plt.plot(epoch_list, train_losses[plot_from-1:], label='Train Loss')
-        plt.plot(epoch_list, val_losses[plot_from-1:], label='Validation Loss')
-        plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('VAE Training on Synthetic Data')
-        plt.yscale('log')
-        plt.legend()
+        ax.plot(epoch_list, train_losses[plot_from-1:], label='Train Loss')
+        ax.plot(epoch_list, val_losses[plot_from-1:], label='Validation Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        ax.set_title('VAE Training on Synthetic Data')
+        ax.set_yscale('log')
+        ax = axs[1]
+        epoch_list = np.arange(1, epoch + 1)
+        epoch_list = epoch_list[epoch_list % self.EVALUATE_SAMPLES_INTERVAL == 0]
+        ax.plot(epoch_list, sample_scores, label='Raw VAE samples')
+        ax.plot(epoch_list, cut_sample_scores, label='Log-prob cutoff Samples')
+        ax.plot(epoch_list, mh_sample_scores, label='MH samples')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Wasserstein Metric')  # TODO: metric_name variable
+        for ax in axs:
+            ax.legend()
         plt.show()
         print(f'Epoch {epoch}')
         print(f'\tTrain loss: {train_losses[-1]:.4f}')
@@ -253,7 +290,7 @@ class VAE(torch.nn.Module):
             std_z = torch.exp(0.5 * log_var_z)
             m = torch.distributions.normal.Normal(mean_z, std_z)
             zs = m.sample((L,))
-            dec_zs = self.decoder(zs)
+            dec_zs = self.decoder(zs.flatten(end_dim=1)).unflatten(dim=0, sizes=(L, -1))
             log_p_zs = self.latent_sampling_distribution.log_prob(zs)  # HEHE idea
             log_p_x_cond_zs = normal_density_log(dec_zs, torch.ones(self.data_dim, device=self.device), x)
             log_q_zs = normal_density_log(mean_z, std_z, zs)
