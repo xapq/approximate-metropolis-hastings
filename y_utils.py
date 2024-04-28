@@ -1,4 +1,5 @@
 import torch
+import math
 
 
 def colorbar(mappable):
@@ -100,3 +101,45 @@ def approximate_with_gaussian(x):
     variances = x.var(dim=0, unbiased=True)
     cov = torch.diag(variances)
     return torch.distributions.MultivariateNormal(mean, cov)
+
+
+# adapted from pytorch gaussian_nll_loss
+def mean_field_log_prob(
+    displacement: torch.Tensor,
+    var: torch.Tensor,
+    full: bool = False,
+    eps: float = 1e-6
+) -> torch.Tensor:
+    r"""Calculate negative log likelihood of multivariate Gaussian distributions with diagonal covariances and excpectation 0 at given points
+
+    Args:
+        input: (*, D) tensor. Expectation of the Gaussian distribution.
+        target: (*, D) tensor. Sample from the Gaussian distribution.
+        var: (*, D) tensor of positive variances in each dimension, one for each of the expectations
+        full (bool, optional): include the constant term in the loss calculation. Default: ``False``.
+        eps (float, optional): value added to var, for stability. Default: 1e-6.
+    """
+    
+    # Check var size
+    # If var.size == input.size, the case is heteroscedastic and no further checks are needed.
+    # Otherwise:
+    #if var.size() != displacement.size():
+    #    print(var.size(), displacement.size())
+    #    raise ValueError("var is of incorrect size")
+
+    # Entries of var must be non-negative
+    if torch.any(var < 0):
+        raise ValueError("var has negative entry/entries")
+
+    # Clamp for stability
+    var = var.clone()
+    with torch.no_grad():
+        var.clamp_(min=eps)
+
+    # Calculate the loss
+    D = displacement.shape[-1]
+    loss = 0.5 * (torch.log(var) + (displacement)**2 / var).sum(dim=-1)
+    if full:
+        loss += 0.5 * D * math.log(2 * math.pi)
+
+    return -loss
