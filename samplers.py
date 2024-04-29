@@ -29,7 +29,7 @@ def metropolis_hastings_with_noise(target, proposal, n_samples, burn_in=100, noi
     return acc_rate, samples[burn_in:].numpy(force=True)
 
 
-def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, visualize=False):
+def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, max_rejections=None, visualize=False):
     '''
     Parameters
     ----------
@@ -43,6 +43,8 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         Number of initial MH samples to discard. 1/20th of the samples by default
     n_estimates : positive integer
         Number of times to evaluate the proposal log-probability estimate.
+    max_rejections : positive integer or None
+        Maximum number of rejections in a row.
     Returns
     -------
     float
@@ -53,36 +55,36 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     n_samples = proposal_samples.shape[0]
     if burn_in is None:
         burn_in = n_samples // 20
+    if max_rejections is None:
+        max_rejections = n_samples
     sample_indicies = torch.arange(n_samples)
     target_log_prob = target.log_prob(proposal_samples)
     proposal_log_probs = torch.stack([proposal_log_prob_estimator(proposal_samples) for _ in range(n_estimates)], dim=-1)    
     acc_noise = torch.rand(n_samples)
     
     n_accepted = 0
-    est_index = 0
     for t in range(1, n_samples):
         index_last = sample_indicies[t - 1]
-        cur_proposal_log_prob = proposal_log_probs[t][est_index]
-        last_proposal_log_prob = proposal_log_probs[index_last][est_index]
+        cur_proposal_log_prob = proposal_log_probs[t][0]
+        last_proposal_log_prob = proposal_log_probs[index_last][(t - index_last) % n_estimates]
         accept_prob = torch.exp(
             (target_log_prob[t] - cur_proposal_log_prob) - (target_log_prob[index_last] - last_proposal_log_prob)
         )
-        if acc_noise[t] < accept_prob:  # accept
+        if acc_noise[t] < accept_prob or t - index_last > max_rejections:  # accept
             n_accepted += (t >= burn_in)
         else:  # reject
             sample_indicies[t] = index_last
-        est_index = (est_index + 1) % n_estimates
     acc_rate = n_accepted / (n_samples - burn_in)
     
     if visualize:
         fig, ax = plt.subplots(figsize=(16, 8))
         log_ratios_accepted = (target_log_prob - proposal_log_probs[..., 0])[sample_indicies]
         log_ratios_all = target_log_prob - proposal_log_probs[..., 0]
-        ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_accepted.exp()), label='Accepted sample target/proposal', zorder=3)
-        ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_all.exp()), label='Proposed sample target/proposal')
-        # ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density', zorder=0)
-        ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density')
-        ax.plot(np.arange(1, n_samples + 1), to_numpy(proposal_log_probs[..., 0].exp()), label='Sample proposal density', zorder=4)
+        #ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_accepted.exp()), label='Accepted sample target/proposal', zorder=3)
+        #ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_all.exp()), label='Proposed sample target/proposal')
+        #ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density')
+        for i in range(n_estimates):
+            ax.scatter(np.arange(1, n_samples + 1), to_numpy(proposal_log_probs[..., i].exp()), label='Sample proposal density', color='tab:red', zorder=4)
         ax.set_yscale('log')
         # ax.set_ylabel('Target / Proposal log-ratio')
         ax.set_xlabel('Sample #')
@@ -95,7 +97,7 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
 
 def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_prob_estimator, n_samples, burn_in=None):
     if burn_in is None:
-        burn_in = n_samples // 10 
+        burn_in = n_samples // 10
     n_samples += burn_in
 
     samples = proposer((n_samples,))

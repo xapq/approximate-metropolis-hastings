@@ -10,6 +10,23 @@ import matplotlib.pyplot as plt
 import ot
 
 
+def coordinate_total_variation(
+    true: torch.tensor,
+    other: torch.tensor,
+    n_kde_samples: int = 1000,
+    mode='mean',  # can be either 'mean' or 'max'
+):
+    D = true.shape[-1]
+    total_variations = []
+    for i in range(D):
+        total_variations.append(total_variation_1d(true[..., i], other[..., i], n_kde_samples))
+    if mode == 'mean':
+        return sum(total_variations) / D
+    if mode == 'max':
+        return max(total_variations)
+    raise ValueError('Invalid mode')
+
+
 class ValueTracker:
     def __init__(self):
         self.values = []
@@ -58,7 +75,7 @@ def sliced_total_variation(
     n_projections: int,
     n_kde_samples: int,
     mode='mean',  # can be either 'mean' or 'max'
-) -> ValueTracker:
+):
     
     true = to_jax(true)
     other = to_jax(other)

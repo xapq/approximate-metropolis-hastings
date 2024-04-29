@@ -1,5 +1,5 @@
 import torch
-import pytorch_warmup as warmup
+from pytorch_warmup import LinearWarmup
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 # from torchvision import datasets
@@ -49,6 +49,7 @@ class VAE(torch.nn.Module):
         super().__init__()
         self.data_dim = data_dim
         self.latent_dim = latent_dim
+        self.hidden_dims = hidden_dims
         encoder_dims = [data_dim, *hidden_dims, 2 * latent_dim]
         decoder_dims = [latent_dim, *hidden_dims[::-1], 2 * data_dim]
         activation = lambda : nn.ReLU(inplace=True)
@@ -68,21 +69,23 @@ class VAE(torch.nn.Module):
         self.std_factor = None
         self.latent_mean = None
         self.latent_std = None
+        self.kl_penalty = None
         
         self.to(device)
         self.__init_weights()
 
     def __repr__(self):
-        return f'y01vae_dim_{self.data_dim}'
+        return f'y02vae_D{self.data_dim}_layers{self.hidden_dims}'
 
     LOSS_THRESHOLD = 1e-4
     PLOT_INTERVAL = 30
     EVALUATE_SAMPLES_INTERVAL = 80
     
     def fit_distribution(self, target, kl_penalty, N_train, optimizer, scheduler=None, max_epochs=5000, kl_annealing_epochs=1, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
+        self.kl_penalty = kl_penalty
         N_val = N_train // 10
         n_eval_samples = min(1500, N_train)
-        self.warmup_scheduler = CubicWarmup(optimizer, warmup_period=200)
+        self.warmup_scheduler = LinearWarmup(optimizer, warmup_period=50)
 
         X_train = target.sample((N_train,))
         train_loader = dataloader_from_tensor(X_train, batch_size)
@@ -117,12 +120,12 @@ class VAE(torch.nn.Module):
             #    lr = cur_lr
             #    self.load_state_dict(best_model_weights)
             
-            cur_kl_penalty = min(1, epoch / kl_annealing_epochs) * kl_penalty
+            cur_kl_penalty = min(1, epoch / kl_annealing_epochs) * self.kl_penalty
             train_recon_loss, train_kl_div = self.__run_epoch(train_loader, cur_kl_penalty, optimizer)
-            train_loss = train_recon_loss + kl_penalty * train_kl_div
+            train_loss = train_recon_loss + self.kl_penalty * train_kl_div
             train_losses.append(train_loss)
             val_recon_loss, val_kl_div = self.__run_epoch(val_loader, cur_kl_penalty)
-            val_loss = val_recon_loss + kl_penalty * val_kl_div
+            val_loss = val_recon_loss + self.kl_penalty * val_kl_div
             val_losses.append(val_loss)
 
             # calculate sample quality
@@ -298,9 +301,9 @@ class VAE(torch.nn.Module):
         kl_div = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1).mean()
         return recon_loss, kl_div
 
-    def loss(self, x, kl_penalty):
+    def loss(self, x):
         recon_loss, kl_div = self.loss_components(x)
-        return recon_loss + kl_penalty * kl_div
+        return recon_loss + self.kl_penalty * kl_div
 
     def save_knowledge(self, filename):
         save_dict = {
@@ -333,7 +336,7 @@ class VAE(torch.nn.Module):
                 loss = recon_loss + cur_kl_penalty * kl_div
                 if is_train:
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=100)
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=10)
                     optimizer.step()
             avg_recon_loss += recon_loss.item() * x.size(0)
             avg_kl_div += kl_div.item() * x.size(0)
@@ -363,3 +366,8 @@ class VAE(torch.nn.Module):
             if isinstance(m, nn.Linear):
                 init.xavier_uniform_(m.weight)
                 init.constant_(m.bias, 0)
+
+
+def get_filename(model, target):
+    filename = f'{model}__{target}.pt'
+    return filename
