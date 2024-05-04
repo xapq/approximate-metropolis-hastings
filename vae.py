@@ -69,7 +69,6 @@ class VAE(torch.nn.Module):
         self.std_factor = None
         self.latent_mean = None
         self.latent_std = None
-        self.kl_penalty = None
         
         self.to(device)
         self.__init_weights()
@@ -81,10 +80,10 @@ class VAE(torch.nn.Module):
     PLOT_INTERVAL = 30
     EVALUATE_SAMPLES_INTERVAL = 80
     
-    def fit_distribution(self, target, kl_penalty, N_train, optimizer, scheduler=None, max_epochs=5000, kl_annealing_epochs=1, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
-        self.kl_penalty = kl_penalty
+    def fit_distribution(self, target, N_train, optimizer, scheduler=None, max_epochs=5000, kl_annealing_epochs=1, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
+        kl_penalty = 1
         N_val = N_train // 10
-        n_eval_samples = min(1500, N_train)
+        n_eval_samples = min(500, N_train)
         self.warmup_scheduler = LinearWarmup(optimizer, warmup_period=50)
 
         X_train = target.sample((N_train,))
@@ -119,13 +118,14 @@ class VAE(torch.nn.Module):
             #if cur_lr < lr:
             #    lr = cur_lr
             #    self.load_state_dict(best_model_weights)
-            
-            cur_kl_penalty = min(1, epoch / kl_annealing_epochs) * self.kl_penalty
+
+            no_penalty_epochs = 100
+            cur_kl_penalty = (0 if epoch <= no_penalty_epochs else min(1, (epoch - no_penalty_epochs) / (kl_annealing_epochs - no_penalty_epochs))) * kl_penalty
             train_recon_loss, train_kl_div = self.__run_epoch(train_loader, cur_kl_penalty, optimizer)
-            train_loss = train_recon_loss + self.kl_penalty * train_kl_div
+            train_loss = train_recon_loss + kl_penalty * train_kl_div
             train_losses.append(train_loss)
             val_recon_loss, val_kl_div = self.__run_epoch(val_loader, cur_kl_penalty)
-            val_loss = val_recon_loss + self.kl_penalty * val_kl_div
+            val_loss = val_recon_loss + kl_penalty * val_kl_div
             val_losses.append(val_loss)
 
             # calculate sample quality
@@ -303,7 +303,7 @@ class VAE(torch.nn.Module):
 
     def loss(self, x):
         recon_loss, kl_div = self.loss_components(x)
-        return recon_loss + self.kl_penalty * kl_div
+        return recon_loss + kl_div
 
     def save_knowledge(self, filename):
         save_dict = {
