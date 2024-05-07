@@ -119,7 +119,7 @@ class VAE(torch.nn.Module):
             #    lr = cur_lr
             #    self.load_state_dict(best_model_weights)
 
-            no_penalty_epochs = 100
+            no_penalty_epochs = 1
             cur_kl_penalty = (0 if epoch <= no_penalty_epochs else min(1, (epoch - no_penalty_epochs) / (kl_annealing_epochs - no_penalty_epochs))) * kl_penalty
             train_recon_loss, train_kl_div = self.__run_epoch(train_loader, cur_kl_penalty, optimizer)
             train_loss = train_recon_loss + kl_penalty * train_kl_div
@@ -195,14 +195,14 @@ class VAE(torch.nn.Module):
 
         proj_dims = (0, 1)
         ax = axs[0][1]
-        ax.scatter(*pl(target_samples[:, proj_dims]), alpha=0.5, label='Target Samples')
+        ax.scatter(*pl(target_samples[:, proj_dims]), alpha=0.5, label='Target Samples', s=1.5)
         good_xlim = ax.get_xlim()
         good_ylim = ax.get_ylim()
-        ax.scatter(*pl(self.sample((2000,))[:, proj_dims]), alpha=0.5, label='VAE Samples')
+        ax.scatter(*pl(self.sample((2000,))[:, proj_dims]), alpha=0.5, label='VAE Samples', s=1.5)
         ax = axs[1][1]
-        ax.scatter(*pl(target_samples[:, proj_dims]), alpha=0.5, label='Target Samples')
+        ax.scatter(*pl(target_samples[:, proj_dims]), alpha=0.5, label='Target Samples', s=1.5)
         reconstructed_target = self.reconstruct(target_samples)
-        ax.scatter(*pl(reconstructed_target[:, proj_dims]), alpha=0.5, label='Reconstructed Target Samples', color='green')
+        ax.scatter(*pl(reconstructed_target[:, proj_dims]), alpha=0.5, label='Reconstructed Target Samples', color='green', s=1.5)
         for ax in (axs[0][1], axs[1][1]):
             ax.set_xlim(good_xlim)
             ax.set_ylim(good_ylim)

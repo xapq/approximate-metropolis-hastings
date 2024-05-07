@@ -112,6 +112,22 @@ class Distribution(ABC):
         return fig, self.xlim, self.ylim
 
 
+def create_gaussian_mixture(means, cov_matricies):
+    return td.MixtureSameFamily(
+        td.Categorical(torch.ones(means.shape[0],)),
+        td.MultivariateNormal(means, cov_matricies)
+    )
+
+def create_gaussian_lattice(shape, step, variance):
+    dim = len(shape)
+    cov_matrix = variance * torch.eye(dim)
+    means = torch.stack(torch.meshgrid(
+        *(float(step) * torch.arange(d_i) for d_i in shape),
+        indexing='xy'
+    )).flatten(start_dim=1).T
+    return create_gaussian_mixture(means, cov_matrix)
+
+
 class GaussianMixture(Distribution):
     """
     Mixture of n gaussians (multivariate)

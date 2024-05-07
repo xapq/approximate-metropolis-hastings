@@ -29,7 +29,7 @@ def metropolis_hastings_with_noise(target, proposal, n_samples, burn_in=100, noi
     return acc_rate, samples[burn_in:].numpy(force=True)
 
 
-def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, max_rejections=None, visualize=False):
+def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, max_rejections=None, visualize=False, return_indicies=True):
     '''
     Parameters
     ----------
@@ -91,8 +91,11 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         ax.axvline(x=burn_in, label='Burn-in', color='r', linestyle='--')
         ax.set_title(f'Metropolis-Hastings Diagnostics\nA/R={acc_rate * 100:0.1f}%')
         ax.legend()
-    
-    return acc_rate, sample_indicies[burn_in:]
+
+    mh_indicies = sample_indicies[burn_in:]
+    if return_indicies:
+        return acc_rate, mh_indicies
+    return acc_rate, proposal_samples[mh_indicies]
 
 
 def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_prob_estimator, n_samples, burn_in=None):
@@ -124,8 +127,10 @@ def get_log_prob_quantile(target, q=0, N=2000):
     log_probs = target.log_prob(samples)
     return log_probs.quantile(q).item()
 
-def log_prob_cutoff_filter(target, samples, cutoff_min, cutoff_max=torch.inf):
+def log_prob_cutoff_filter(target, samples, cutoff_min, cutoff_max=torch.inf, return_indicies=True):
     sample_log_prob = target.log_prob(samples)
     cut_indicies = (cutoff_min < sample_log_prob) & (sample_log_prob < cutoff_max)
     acc_rate = cut_indicies.sum() / len(cut_indicies)
-    return acc_rate.item(), cut_indicies
+    if return_indicies:
+        return acc_rate.item(), cut_indicies
+    return acc_rate.item(), samples[cut_indicies]
