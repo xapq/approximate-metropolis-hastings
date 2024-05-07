@@ -1,142 +1,111 @@
 from dataclasses import dataclass
-
+from abc import ABC, abstractmethod
 import jax
-import torch
-import numpy as np
 from jax import numpy as jnp
-from scipy.stats import gaussian_kde
-from tqdm.auto import trange
-import matplotlib.pyplot as plt
+from jax.scipy.stats import gaussian_kde
+import torch
 import ot
+from utilities import torch_to_jax
 
 
-def coordinate_total_variation(
-    true: torch.tensor,
-    other: torch.tensor,
-    n_kde_samples: int = 1000,
-    mode='mean',  # can be either 'mean' or 'max'
-):
-    D = true.shape[-1]
-    total_variations = []
-    for i in range(D):
-        total_variations.append(total_variation_1d(true[..., i], other[..., i], n_kde_samples))
-    if mode == 'mean':
-        return sum(total_variations) / D
-    if mode == 'max':
-        return max(total_variations)
-    raise ValueError('Invalid mode')
-
-
-class ValueTracker:
-    def __init__(self):
-        self.values = []
-
-    def update(self, value: float) -> None:
-        self.values.append(value)
-
-    def __len__(self):
-        return len(self.values)
-
-    def mean(self) -> float:
-        return jnp.mean(jnp.array(self.values))
-
-    def std(self) -> float:
-        return jnp.std(jnp.array(self.values), ddof=1)
-
-    def std_of_mean(self) -> float:
-        return jnp.std(jnp.array(self.values)) / jnp.sqrt(len(self))
-
-    def max(self):
-        return jnp.max(jnp.array(self.values))
-
-    def last(self) -> float:
-        return self.values[-1]
-
-
-@dataclass
-class Projector:
-    x0: jnp.ndarray
-    v: jnp.ndarray
-
-    def project(self, xs: jnp.ndarray) -> jnp.ndarray:
-        return (xs - self.x0[None]) @ self.v
-
-
-def create_random_projection(key: jnp.ndarray, xs: jnp.ndarray) -> Projector:
-    x0 = jnp.mean(xs, 0)
-    v = jax.random.normal(key, [len(x0)])
-    v = v / jnp.linalg.norm(v)
-    return Projector(x0, v)
-
-
-def sliced_total_variation(
-    true: torch.tensor,
-    other: torch.tensor,
-    n_projections: int,
-    n_kde_samples: int,
-    mode='mean',  # can be either 'mean' or 'max'
-):
+class DistributionMetric(ABC):
+    @abstractmethod
+    def __call__(self, sample1, sample2):
+        pass
     
-    true = to_jax(true)
-    other = to_jax(other)
-    tracker = ValueTracker()
-    key = jax.random.PRNGKey(0)
-    keys = jax.random.split(key, n_projections)
-    for i in range(n_projections):  # can use trange
-        tracker.update(random_projection_total_variation(keys[i], true, other, n_kde_samples))
+    @abstractmethod
+    def name():
+        pass
+
+
+class WassersteinMetric(DistributionMetric):
+    def __call__(self, sample1, sample2):
+        if sample1.dim() == 1:
+            sample1 = sample1.unsqueeze(-1)
+        if sample2.dim() == 1:
+            sample2 = sample2.unsqueeze(-1)
+        a = torch.ones(sample1.shape[0]) / sample1.shape[0]
+        b = torch.ones(sample2.shape[0]) / sample2.shape[0]
+        M = ot.dist(sample1, sample2, metric='euclidean')
+        gamma, log = ot.emd(a, b, M, log=True, numThreads='max', numItermax=500_000)
+        return log['cost']
     
-    if mode == 'mean':
-        return tracker.mean()
-    if mode == 'max':
-        return tracker.max()
-    raise ValueError('Invalid mode')
+    def name(self):
+        return 'Wasserstein Metric'
 
 
-def random_projection_total_variation(
-    key: jnp.ndarray,
-    xs_true: jnp.ndarray,
-    xs_pred: jnp.ndarray,
-    n_kde_samples: int,
-):
-    proj = create_random_projection(key, xs_true)
-    return total_variation_1d(
-        proj.project(xs_true),
-        proj.project(xs_pred),
-        n_kde_samples,
-        is_input_jax=True
-    )
+class TotalVariation1d(DistributionMetric):
+    def __init__(self, n_density_samples=1000):
+        self.n_density_samples = n_density_samples
+
+    "All dimensions except the last one are considered batch dimensions"
+    def __call__(self, sample1, sample2):
+        sample1 = torch_to_jax(sample1)
+        sample2 = torch_to_jax(sample2)
+        density1 = gaussian_kde(sample1)
+        density2 = gaussian_kde(sample2)
+        x_min = jnp.minimum(sample1.min(axis=-1), sample2.min(axis=-1))
+        x_max = jnp.maximum(sample1.max(axis=-1), sample2.max(axis=-1))
+        eval_points = jnp.linspace(x_min, x_max, self.n_density_samples)
+        return (
+            0.5
+            * jnp.abs(density1(eval_points) - density2(eval_points)).mean()
+            * (x_max - x_min)
+        )
+
+    def name(self):
+        return 'Total Variation'
 
 
-def total_variation_1d(xs_true, xs_pred, n_samples=1000, is_input_jax=False):
-    if not is_input_jax:
-        xs_true = to_jax(xs_true)
-        xs_pred = to_jax(xs_pred)
-    true_density = gaussian_kde(xs_true)
-    pred_density = gaussian_kde(xs_pred)
+### TODO: add full support for batched data
+class SlicedDistributionMetric(DistributionMetric):
+    def __init__(self, metric_1d, n_projections, mode='mean'):
+        self.metric_1d = metric_1d
+        self.n_projections = n_projections
+        self.mode = mode
 
-    x_min = min(xs_true.min(), xs_pred.min())
-    x_max = max(xs_true.max(), xs_pred.max())
+    def __call__(self, sample1, sample2):
+        data_dim = sample1.shape[-1]
+        assert(sample2.shape[-1] == data_dim)
+        projection_vectors = torch.randn(data_dim, self.n_projections, device=sample1.device)
+        sample1_projections = torch.matmul(sample1, projection_vectors)
+        sample2_projections = torch.matmul(sample2, projection_vectors)
+        metric_1d_values = []
+        for i in range(self.n_projections):
+            metric_1d_values.append(
+                self.metric_1d(sample1_projections[..., i], sample2_projections[..., i])
+            )
+        if self.mode == 'mean':
+            return sum(metric_1d_values) / self.n_projections
+        if self.mode == 'max':
+            return max(metric_1d_values)
+        raise ValueError('Invalid mode')
 
-    points = np.linspace(x_min, x_max, n_samples)
-
-    return (
-        0.5
-        * np.abs(true_density(points) - pred_density(points)).mean()
-        * (x_max - x_min)
-    )
+    def name(self):
+        return f'{self.n_projections}-{self.mode.capitalize()} Sliced {self.metric_1d.name()}'
 
 
-# torch.tensor to jax.numpy.ndarray
-def to_jax(tensor: torch.tensor):
-    return jnp.array(tensor.detach().cpu().numpy())
+### TODO: remove duplicate code with SlicedDistributionMetric
+class CoordinateDistributionMetric(DistributionMetric):
+    def __init__(self, metric_1d, mode='mean'):
+        self.metric_1d = metric_1d
+        self.mode = mode
 
+    def __call__(self, sample1, sample2):
+        assert(sample1.shape[-1] == sample2.shape[-1])
+        metric_1d_values = []
+        for i in range(self.n_projections):
+            metric_1d_values.append(
+                self.metric_1d(sample1[..., i], sample2[..., i])
+            )
+        if self.mode == 'mean':
+            return sum(metric_1d_values) / self.n_projections
+        if self.mode == 'max':
+            return max(metric_1d_values)
+        raise ValueError('Invalid mode')
 
-def wasserstein_metric(sample1, sample2):
-    a = torch.ones(sample1.shape[0]) / sample1.shape[0]
-    b = torch.ones(sample2.shape[0]) / sample2.shape[0]
-    M = ot.dist(sample1, sample2)
-    gamma, log = ot.emd(a, b, M, log=True, numThreads='max', numItermax=500_000)
-    return log['cost']
+    def name(self):
+        return f'{self.mode.capitalize()} Coordinate {self.metric_1d.name()}'
 
 
 # def average_emd(

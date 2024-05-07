@@ -114,17 +114,17 @@ class Distribution(ABC):
 
 def create_gaussian_mixture(means, cov_matricies):
     return td.MixtureSameFamily(
-        td.Categorical(torch.ones(means.shape[0],)),
+        td.Categorical(torch.ones(means.shape[0], device=means.device)),
         td.MultivariateNormal(means, cov_matricies)
     )
 
-def create_gaussian_lattice(shape, step, variance):
+def create_gaussian_lattice(shape, step, variance, device='cpu'):
     dim = len(shape)
-    cov_matrix = variance * torch.eye(dim)
+    cov_matrix = variance * torch.eye(dim, device=device)
     means = torch.stack(torch.meshgrid(
         *(float(step) * torch.arange(d_i) for d_i in shape),
         indexing='xy'
-    )).flatten(start_dim=1).T
+    )).flatten(start_dim=1).T.to(device)
     return create_gaussian_mixture(means, cov_matrix)
 
 

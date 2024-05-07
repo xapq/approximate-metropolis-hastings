@@ -80,15 +80,15 @@ class VAE(torch.nn.Module):
     PLOT_INTERVAL = 30
     EVALUATE_SAMPLES_INTERVAL = 80
     
-    def fit_distribution(self, target, N_train, optimizer, scheduler=None, max_epochs=5000, kl_annealing_epochs=1, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
-        kl_penalty = 1
+    def fit_distribution(self, target, N_train, optimizer, scheduler=None, max_epochs=5000, no_kl_penalty_epochs=10, kl_annealing_epochs=100, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
         N_val = N_train // 10
         n_eval_samples = min(500, N_train)
         self.warmup_scheduler = LinearWarmup(optimizer, warmup_period=50)
 
         X_train = target.sample((N_train,))
+        X_val = target.sample((N_val,))
         train_loader = dataloader_from_tensor(X_train, batch_size)
-        val_loader = dataloader_from_tensor(target.sample((N_val,)), batch_size)
+        val_loader = dataloader_from_tensor(X_val, batch_size)
 
         # filters & sample score
         L = 64
@@ -99,6 +99,11 @@ class VAE(torch.nn.Module):
         sample_score = lambda sample: distribution_metric(X_train[:n_eval_samples], sample)
         target_samples = target.sample((2000,))
         best_sample_score = sample_score(target.sample((n_eval_samples,)))
+
+        def epoch_kl_penalty(epoch):
+            if epoch <= no_kl_penalty_epochs:
+                return 0
+            return min(1., (epoch - no_kl_penalty_epochs) / kl_annealing_epochs)
         
         train_losses = []
         val_losses = []
@@ -120,12 +125,12 @@ class VAE(torch.nn.Module):
             #    self.load_state_dict(best_model_weights)
 
             no_penalty_epochs = 1
-            cur_kl_penalty = (0 if epoch <= no_penalty_epochs else min(1, (epoch - no_penalty_epochs) / (kl_annealing_epochs - no_penalty_epochs))) * kl_penalty
+            cur_kl_penalty = epoch_kl_penalty(epoch)
             train_recon_loss, train_kl_div = self.__run_epoch(train_loader, cur_kl_penalty, optimizer)
-            train_loss = train_recon_loss + kl_penalty * train_kl_div
+            train_loss = train_recon_loss + train_kl_div
             train_losses.append(train_loss)
             val_recon_loss, val_kl_div = self.__run_epoch(val_loader, cur_kl_penalty)
-            val_loss = val_recon_loss + kl_penalty * val_kl_div
+            val_loss = val_recon_loss +  val_kl_div
             val_losses.append(val_loss)
 
             # calculate sample quality
@@ -329,6 +334,7 @@ class VAE(torch.nn.Module):
         avg_recon_loss = 0.0
         avg_kl_div = 0.0
         for x in data_loader:
+            x = x.to(self.device)
             if is_train:
                 optimizer.zero_grad()
             with torch.set_grad_enabled(is_train):
