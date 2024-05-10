@@ -18,17 +18,24 @@ class DistributionMetric(ABC):
         pass
 
 
+# W_2
 class WassersteinMetric(DistributionMetric):
     def __call__(self, sample1, sample2):
-        if sample1.dim() == 1:
-            sample1 = sample1.unsqueeze(-1)
-        if sample2.dim() == 1:
-            sample2 = sample2.unsqueeze(-1)
         a = torch.ones(sample1.shape[0]) / sample1.shape[0]
         b = torch.ones(sample2.shape[0]) / sample2.shape[0]
-        M = ot.dist(sample1, sample2, metric='euclidean')
-        gamma, log = ot.emd(a, b, M, log=True, numThreads='max', numItermax=500_000)
-        return log['cost']
+        M = ot.dist(sample1, sample2)
+        W = ot.emd2(a, b, M, numThreads='max', numItermax=500_000) ** 0.5
+        return W
+    
+    def name(self):
+        return 'Wasserstein Metric'
+
+
+# W_2
+class WassersteinMetric1d(DistributionMetric):
+    def __call__(self, sample1, sample2):
+        cost = ot.wasserstein_1d(sample1, sample2, p=2) ** 0.5
+        return cost
     
     def name(self):
         return 'Wasserstein Metric'

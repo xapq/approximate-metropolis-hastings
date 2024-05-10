@@ -127,6 +127,16 @@ def create_gaussian_lattice(shape, step, variance, device='cpu'):
     )).flatten(start_dim=1).T.to(device)
     return create_gaussian_mixture(means, cov_matrix)
 
+def create_random_gaussian_mixture(dim, n_components, mean_lim=(0, 1), variance_lim=(0.1, 1), device='cpu', seed=None):
+    gen = torch.Generator()
+    if seed is None:
+        gen.seed()
+    else:
+        gen.manual_seed(seed)
+    scale_to = lambda x, lim: x * (lim[1] - lim[0]) + lim[0]
+    means = scale_to(torch.rand(n_components, dim, generator=gen), mean_lim)
+    cov_matricies = scale_to(torch.rand(n_components, 1, 1, generator=gen), variance_lim) * torch.eye(dim)
+    return create_gaussian_mixture(means.to(device), cov_matricies.to(device))
 
 class GaussianMixture(Distribution):
     """

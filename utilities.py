@@ -1,5 +1,6 @@
 import torch
 import jax
+from jax import numpy as jnp
 
 # torch.tensor to jax.numpy.ndarray
 ### TODO: make this work for jax on cuda
