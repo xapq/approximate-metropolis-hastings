@@ -8,3 +8,16 @@ def torch_to_jax(tensor):
     if isinstance(tensor, jnp.ndarray):
         return tensor
     return jnp.array(tensor.detach().cpu().numpy())
+
+
+def estimate_mean_and_std(function, n_runs=10, *args, **kwargs):
+    values = torch.tensor([function(*args, **kwargs) for _ in range(n_runs)])
+    mean = values.mean(dim=0)
+    std = values.std(dim=0)
+    return mean, std
+
+
+# Blame the developers of torch.distributions.mixture_same_family.sample()
+def sample_by_batches(distribution, n_samples, batch_size):
+    n_batches = (n_samples - 1) // batch_size + 1
+    return torch.cat([distribution.sample((batch_size,)) for _ in range(n_batches)])[:n_samples]

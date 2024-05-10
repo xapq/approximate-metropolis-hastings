@@ -102,7 +102,7 @@ class VAE(torch.nn.Module):
 
         def epoch_kl_penalty(epoch):
             if epoch <= no_kl_penalty_epochs:
-                return 0
+                return 0.01
             return min(1., (epoch - no_kl_penalty_epochs) / kl_annealing_epochs)
         
         train_losses = []
@@ -174,7 +174,7 @@ class VAE(torch.nn.Module):
         self.load_state_dict(best_model_weights)
         self.eval()
 
-    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=1):
+    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=2):
         clear_output(wait=True)
         epoch = len(val_losses)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)

@@ -135,8 +135,11 @@ def create_random_gaussian_mixture(dim, n_components, mean_lim=(0, 1), variance_
         gen.manual_seed(seed)
     scale_to = lambda x, lim: x * (lim[1] - lim[0]) + lim[0]
     means = scale_to(torch.rand(n_components, dim, generator=gen), mean_lim)
-    cov_matricies = scale_to(torch.rand(n_components, 1, 1, generator=gen), variance_lim) * torch.eye(dim)
+    principal_components = torch.linalg.qr(torch.rand(n_components, dim, dim, generator=gen)).Q
+    component_variances = scale_to(torch.rand(n_components, dim, 1, generator=gen), variance_lim) * torch.eye(dim)
+    cov_matricies = principal_components @ component_variances @ principal_components.transpose(-2, -1)
     return create_gaussian_mixture(means.to(device), cov_matricies.to(device))
+
 
 class GaussianMixture(Distribution):
     """
