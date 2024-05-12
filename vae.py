@@ -144,6 +144,8 @@ class VAE(torch.nn.Module):
                 sample_scores.append(sample_score(model_samples))
                 cut_acc_rate, cut_indicies = log_prob_cutoff_filter(target, model_samples, cutoff_log_prob)
                 cut_samples = model_samples[cut_indicies]
+                if cut_samples.shape[0] == 0:
+                    cut_samples = torch.zeros((1, self.data_dim), device=self.device)
                 cut_sample_scores.append(sample_score(cut_samples))
                 mh_acc_rate, mh_indicies = metropolis_hastings_filter(target, cut_samples, model_log_prob_estimator)
                 mh_samples = cut_samples[mh_indicies]
@@ -169,12 +171,15 @@ class VAE(torch.nn.Module):
 
             with self.warmup_scheduler.dampening():
                 if scheduler is not None:
-                    scheduler.step(val_loss)
+                    if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                        scheduler.step(val_loss)
+                    else:
+                        scheduler.step()
     
         self.load_state_dict(best_model_weights)
         self.eval()
 
-    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=2):
+    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=5):
         clear_output(wait=True)
         epoch = len(val_losses)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
