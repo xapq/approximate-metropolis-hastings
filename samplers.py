@@ -57,18 +57,25 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         burn_in = n_samples // 20
     if max_rejections is None:
         max_rejections = n_samples
-    sample_indicies = torch.arange(n_samples)
+    
     target_log_prob = target.log_prob(proposal_samples)
     proposal_log_probs = torch.stack([proposal_log_prob_estimator(proposal_samples) for _ in range(n_estimates)], dim=-1)
     density_ratios = target_log_prob.unsqueeze(-1) - proposal_log_probs.to(target_log_prob.device)
+    sample_indicies = torch.arange(n_samples)
+    
     if max_density_ratio is not None:
-        density_ratios = torch.minimum(density_ratios, max_density_ratio)
+        non_outlier = density_ratios.median(dim=1).values < max_density_ratio
+        sample_indicies = sample_indicies[non_outlier.to('cpu')]
+        # density_ratios = density_ratios[non_outlier]
+        print(f'MH discarded {n_samples - sample_indicies.shape[0]} outlier(s)')
+        n_samples = sample_indicies.shape[0]
+        
     acc_noise = torch.rand(n_samples)
     
     n_accepted = 0
     for t in range(1, n_samples):
         index_last = sample_indicies[t - 1]
-        cur_density_ratio = density_ratios[t][0]
+        cur_density_ratio = density_ratios[sample_indicies[t]][0]
         last_density_ratio = density_ratios[index_last][(t - index_last) % n_estimates]
         accept_prob = torch.exp(
             cur_density_ratio - last_density_ratio

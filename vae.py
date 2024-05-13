@@ -82,7 +82,7 @@ class VAE(torch.nn.Module):
     
     def fit_distribution(self, target, N_train, optimizer, scheduler=None, max_epochs=5000, no_kl_penalty_epochs=10, kl_annealing_epochs=100, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
         N_val = N_train // 10
-        n_eval_samples = min(500, N_train)
+        n_eval_samples = min(1000, N_train)
         self.warmup_scheduler = LinearWarmup(optimizer, warmup_period=50)
 
         X_train = target.sample((N_train,))
@@ -147,7 +147,7 @@ class VAE(torch.nn.Module):
                 if cut_samples.shape[0] == 0:
                     cut_samples = torch.zeros((1, self.data_dim), device=self.device)
                 cut_sample_scores.append(sample_score(cut_samples))
-                mh_acc_rate, mh_indicies = metropolis_hastings_filter(target, cut_samples, model_log_prob_estimator)
+                mh_acc_rate, mh_indicies = metropolis_hastings_filter(target, cut_samples, model_log_prob_estimator, max_density_ratio=7)
                 mh_samples = cut_samples[mh_indicies]
                 mh_sample_scores.append(sample_score(mh_samples))
     
@@ -179,7 +179,7 @@ class VAE(torch.nn.Module):
         self.load_state_dict(best_model_weights)
         self.eval()
 
-    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=5):
+    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=10):
         clear_output(wait=True)
         epoch = len(val_losses)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
