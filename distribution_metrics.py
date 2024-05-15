@@ -58,7 +58,7 @@ class TotalVariation1d(DistributionMetric):
             0.5
             * jnp.abs(density1(eval_points) - density2(eval_points)).mean()
             * (x_max - x_min)
-        )
+        ).item()
 
     def name(self):
         return 'Total Variation'

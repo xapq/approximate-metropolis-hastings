@@ -179,7 +179,7 @@ class VAE(torch.nn.Module):
         self.load_state_dict(best_model_weights)
         self.eval()
 
-    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=10):
+    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=50):
         clear_output(wait=True)
         epoch = len(val_losses)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
@@ -343,7 +343,7 @@ class VAE(torch.nn.Module):
                 loss = recon_loss + cur_kl_penalty * kl_div
                 if is_train:
                     loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=10)
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5)
                     optimizer.step()
             avg_recon_loss += recon_loss.item() * x.size(0)
             avg_kl_div += kl_div.item() * x.size(0)

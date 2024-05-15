@@ -18,7 +18,7 @@ def estimate_mean_and_std(function, n_runs=10, *args, **kwargs):
 
 
 def estimate_quartiles(function, n_runs=10, *args, **kwargs):
-    values = torch.tensor([function(*args, **kwargs) for _ in range(n_runs)])
+    values = torch.tensor([function(*args, **kwargs) for i in range(n_runs)])
     lower = values.quantile(q=0.25, interpolation='higher')
     upper = values.quantile(q=0.75, interpolation='lower')
     return lower, upper

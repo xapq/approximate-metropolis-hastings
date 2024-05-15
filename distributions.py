@@ -358,7 +358,6 @@ class Funnel(Distribution):
         super().__init__(**kwargs)
         self.device = kwargs.get("device", "cpu")
         self.a = (kwargs.get("a", 1.0) * torch.ones(1)).to(self.device)
-        self.b = kwargs.get("b", 0.5)
         self.dim = kwargs.get("dim", 16)
         self.distr1 = torch.distributions.Normal(torch.zeros(1).to(self.device), self.a)
         # self.distr2 = lambda z1: torch.distributions.MultivariateNormal(torch.zeros(self.dim-1), (2*self.b*z1).exp()*torch.eye(self.dim-1))
@@ -367,14 +366,21 @@ class Funnel(Distribution):
         self.ylim = [-30, 30]
         self.scale_2d_log_prob = 20  # 30.0
 
-    def log_prob(self, z, x=None):
-        logprob1 = self.distr1.log_prob(z[..., 0])
-        z1 = z[..., 0]
-        logprob2 = (
-            -0.5 * (z[..., 1:] ** 2).sum(-1) * torch.exp(-2 * self.b * z1)
-            - (self.dim - 1) * self.b * z1
-        )
-        return logprob1 + logprob2
+    def log_prob(self, x: torch.FloatTensor) -> torch.FloatTensor:
+        """
+        Returns:
+            log p(x)
+        """
+
+        normal_first = torch.distributions.Normal(torch.zeros(x.shape[:-1], device=x.device), torch.exp(x[..., 0] / 2.))
+        return normal_first.log_prob(x[..., 1:].permute(-1, *range(x.ndim-1))).sum(0) + \
+            self.distr1.log_prob(x[..., 0])
+
+    def sample(self, sample_shape):
+        samples  = torch.randn(*sample_shape, self.dim, device=self.device)
+        samples[..., 0] *= self.a
+        samples[..., 1:] *= (samples[..., 0].unsqueeze(-1) / 2).exp()
+        return samples
 
     def log_prob_2d_slice(self, z, dim1=0, dim2=1):
         if dim1 == 0 or dim2 == 0:
