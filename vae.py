@@ -2,8 +2,6 @@ import torch
 from pytorch_warmup import LinearWarmup
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-# from torchvision import datasets
-# from torchvision import transforms
 from torch.nn import functional as F
 import torch.nn.init as init
 import numpy as np
@@ -12,23 +10,13 @@ from samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from y_utils import *
-from warmup_schedules import CubicWarmup
+from distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
 
 
 def dataloader_from_tensor(X, batch_size):
     dataset = TensorDataset(X)
     dataloader = DataLoader(X, batch_size=batch_size, shuffle=True)
     return dataloader
-
-
-class BatchReshape(nn.Module):
-    def __init__(self, shape):
-        super(BatchReshape, self).__init__()
-        self.shape = shape
-
-    def forward(self, x):
-        return x.view(-1, *self.shape)
-
 
 def SequentialFC(dims, activation):
     network = nn.Sequential(nn.Linear(dims[0], dims[1]))
@@ -57,181 +45,17 @@ class VAE(torch.nn.Module):
         self.decoder = SequentialFC(decoder_dims, activation)
         self.device = device
 
-        '''train_info = {
-            'epoch': 0,
-            'kl_penalty': 0,
-            'train_losses': [],
-            'val_losses': [],
-        }'''
-
         self.prior = torch.distributions.MultivariateNormal(torch.zeros(latent_dim, device=device), torch.diag(torch.ones(latent_dim, device=device)))
-        self.latent_sampling_distribution = None
-        self.std_factor = None
-        self.latent_mean = None
-        self.latent_std = None
+        self.latent_sampling_distribution = self.prior
+        self.std_factor = 1
         
         self.to(device)
-        self.__init_weights()
 
     def __repr__(self):
         return f'y02vae_D{self.data_dim}_layers{self.hidden_dims}'
 
-    LOSS_THRESHOLD = 1e-4
-    PLOT_INTERVAL = 30
-    EVALUATE_SAMPLES_INTERVAL = 80
-    
-    def fit_distribution(self, target, N_train, optimizer, scheduler=None, max_epochs=5000, no_kl_penalty_epochs=10, kl_annealing_epochs=100, early_stopping_epochs=1000, batch_size=64, distribution_metric=None):
-        N_val = N_train // 10
-        n_eval_samples = min(1000, N_train)
-        self.warmup_scheduler = LinearWarmup(optimizer, warmup_period=50)
-
-        X_train = target.sample((N_train,))
-        X_val = target.sample((N_val,))
-        train_loader = dataloader_from_tensor(X_train, batch_size)
-        val_loader = dataloader_from_tensor(X_val, batch_size)
-
-        # filters & sample score
-        L = 64
-        beta = 1
-        cutoff_quantile = 1e-4
-        model_log_prob_estimator = lambda x : self.iw_log_marginal_estimate(x, L=L, beta=beta, batch_L=32)
-        cutoff_log_prob = target.log_prob(X_train).quantile(cutoff_quantile)
-        sample_score = lambda sample: distribution_metric(X_train[:n_eval_samples], sample).item()
-        target_samples = target.sample((2000,))
-        best_sample_score = sample_score(target.sample((n_eval_samples,)))
-
-        def epoch_kl_penalty(epoch):
-            if epoch <= no_kl_penalty_epochs:
-                return 0.01
-            return min(1., (epoch - no_kl_penalty_epochs) / kl_annealing_epochs)
-        
-        train_losses = []
-        val_losses = []
-        sample_scores = []
-        cut_sample_scores = []
-        mh_sample_scores = []
-        best_val_loss = float('inf')
-        best_model_weights = None
-        lr = optimizer.param_groups[0]['lr']
-        no_improvement_epochs = 0
-        
-        for epoch in range(1, max_epochs + 1):
-            lr = optimizer.param_groups[0]['lr']
-            #print('Epoch', epoch, 'lr', lr)
-            assert(not torch.stack([p.isnan().any() for p in self.parameters()]).any())
-            
-            #if cur_lr < lr:
-            #    lr = cur_lr
-            #    self.load_state_dict(best_model_weights)
-
-            no_penalty_epochs = 1
-            cur_kl_penalty = epoch_kl_penalty(epoch)
-            train_recon_loss, train_kl_div = self.__run_epoch(train_loader, cur_kl_penalty, optimizer)
-            train_loss = train_recon_loss + train_kl_div
-            train_losses.append(train_loss)
-            val_recon_loss, val_kl_div = self.__run_epoch(val_loader, cur_kl_penalty)
-            val_loss = val_recon_loss +  val_kl_div
-            val_losses.append(val_loss)
-
-            # calculate sample quality
-            if epoch % self.EVALUATE_SAMPLES_INTERVAL == 0:
-                self.eval()
-                latent_train = self.encode(X_train)
-                self.latent_mean = torch.mean(latent_train, dim=0)
-                self.latent_std = torch.std(latent_train, dim=0)
-                self.set_std_factor(1)
-                model_samples = self.sample((n_eval_samples,))
-                sample_scores.append(sample_score(model_samples))
-                cut_acc_rate, cut_indicies = log_prob_cutoff_filter(target, model_samples, cutoff_log_prob)
-                cut_samples = model_samples[cut_indicies]
-                if cut_samples.shape[0] == 0:
-                    cut_samples = torch.zeros((1, self.data_dim), device=self.device)
-                cut_sample_scores.append(sample_score(cut_samples))
-                mh_acc_rate, mh_indicies = metropolis_hastings_filter(target, cut_samples, model_log_prob_estimator, max_density_ratio=7)
-                mh_samples = cut_samples[mh_indicies]
-                mh_sample_scores.append(sample_score(mh_samples))
-    
-            if epoch % self.PLOT_INTERVAL == 0:
-                self.eval()
-                latent_train = self.encode(X_train)
-                self.latent_mean = torch.mean(latent_train, dim=0)
-                self.latent_std = torch.std(latent_train, dim=0)
-                self.set_std_factor(1)
-                self.plot_losses(train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric)
-    
-            # Autostopping
-            if val_loss < (1 - self.LOSS_THRESHOLD) * best_val_loss:
-                best_val_loss = val_loss
-                best_model_weights = self.state_dict()
-                no_improvement_epochs = 0
-            else:
-                no_improvement_epochs += 1
-                if min(no_improvement_epochs, epoch - kl_annealing_epochs) > early_stopping_epochs:
-                    break
-
-            with self.warmup_scheduler.dampening():
-                if scheduler is not None:
-                    if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                        scheduler.step(val_loss)
-                    else:
-                        scheduler.step()
-    
-        self.load_state_dict(best_model_weights)
-        self.eval()
-
-    def plot_losses(self, train_losses, val_losses, sample_scores, cut_sample_scores, mh_sample_scores, best_sample_score, lr, target_samples, distribution_metric, plot_from=50):
-        clear_output(wait=True)
-        epoch = len(val_losses)
-        fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
-
-        ax = axs[0][0]
-        epoch_list = np.arange(plot_from, epoch + 1)
-        ax.plot(epoch_list, train_losses[plot_from-1:], label='Train Loss')
-        ax.plot(epoch_list, val_losses[plot_from-1:], label='Validation Loss')
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel('Loss')
-        ax.set_title('VAE Training on Synthetic Data')
-        # ax.set_yscale('log')
-        ax = axs[1][0]
-        epoch_list = np.arange(1, epoch + 1)
-        epoch_list = epoch_list[epoch_list % self.EVALUATE_SAMPLES_INTERVAL == 0]
-        ax.plot(epoch_list, sample_scores, label='Raw VAE samples')
-        ax.plot(epoch_list, cut_sample_scores, label='Log-prob cutoff Samples')
-        ax.plot(epoch_list, mh_sample_scores, label='MH samples')
-        ax.axhline(best_sample_score, label='Best possible score', linestyle='--', color='black')
-        ax.set_yscale('log')
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel(distribution_metric.name())
-
-        proj_dims = (0, 1)
-        ax = axs[0][1]
-        ax.scatter(*pl(target_samples[:, proj_dims]), alpha=0.5, label='Target Samples', s=1.5)
-        good_xlim = ax.get_xlim()
-        good_ylim = ax.get_ylim()
-        ax.scatter(*pl(self.sample((2000,))[:, proj_dims]), alpha=0.5, label='VAE Samples', s=1.5)
-        ax = axs[1][1]
-        ax.scatter(*pl(target_samples[:, proj_dims]), alpha=0.5, label='Target Samples', s=1.5)
-        reconstructed_target = self.reconstruct(target_samples)
-        ax.scatter(*pl(reconstructed_target[:, proj_dims]), alpha=0.5, label='Reconstructed Target Samples', color='green', s=1.5)
-        for ax in (axs[0][1], axs[1][1]):
-            ax.set_xlim(good_xlim)
-            ax.set_ylim(good_ylim)
-        
-        for ax in axs.flatten():
-            ax.legend()
-        plt.show()
-        print(f'Epoch {epoch}')
-        print(f'\tTrain loss: {train_losses[-1]:.4f}')
-        print(f'\tValidation loss: {val_losses[-1]:.4f}')
-        print(f'\tLearning rate: {lr}')
-
     def forward(self, x):
-        assert(False)
-        pass
-        # mean_z, log_var_z = self.encode(x)
-        # z = self.reparameterize(mean_z, log_var_z)
-        # mean_x, log_var_x = self.decode(z)
-        # return mean_x, log_var_x, mean_z, log_var_z
+        return reconstruct(x)
 
     def reparameterize(self, mean, log_var):
         std = torch.exp(0.5 * log_var)
@@ -263,116 +87,254 @@ class VAE(torch.nn.Module):
         x = self.reparameterize(mean_x, log_var_x)
         return x
 
-    def sample_prior(self, n=1, std_factor=1):
-        with torch.no_grad():
-            z = torch.randn(n, self.latent_dim, device=self.device) * std_factor
-        return z
-
-    def sample_latent(self, sample_shape=(1,)):
-        return self.latent_sampling_distribution.sample(sample_shape)
-
     def sample(self, sample_shape=(1,)):
         z = self.sample_latent(sample_shape)
         return self.decode(z)
 
+    def sample_prior(self, sample_shape=(1,)):
+        return self.prior.sample(sample_shape)
+
+    def sample_latent(self, sample_shape=(1,)):
+        return self.latent_sampling_distribution.sample(sample_shape)
+
     ### standard deviation multipler for ancestral sampling
     def set_std_factor(self, std_factor):
         self.std_factor = std_factor
-        self.latent_sampling_distribution = torch.distributions.MultivariateNormal(self.latent_mean, self.latent_std.diag() * std_factor ** 2)
+        self.latent_sampling_distribution = torch.distributions.MultivariateNormal(
+            torch.zeros(self.latent_dim, device=self.device),
+            torch.eye(self.latent_dim, device=self.device) * std_factor ** 2
+        )
 
     # beta -- smoothing constant for log-sum-exp
+    # assumes self.latent_sampling_distribution hasn't changed since sampling x
     def iw_log_marginal_estimate(self, x, L, beta=1, batch_L=64):
         point_estimates = []
         for i in range(0, L, batch_L):
-            point_estimates.append(self.__iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
+            point_estimates.append(self._iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
         point_estimates = torch.cat(point_estimates)
-        
-        # log-sum-exp trick
-        #point_estimates, indicies = torch.sort(point_estimates, dim=0)
-        #point_estimates = point_estimates[n_outliers : L - n_outliers]
         estimate = (torch.logsumexp(point_estimates.double() / beta, dim=0) - np.log(point_estimates.shape[0])) * beta
-        #max_est = torch.max(point_estimates)
-        #estimate = (point_estimates - max_est).to(torch.float64).exp().mean(dim=0).log() + max_est
         return estimate
-
-    # Returns reconstruction loss and KL divergence from prior
-    def loss_components(self, x):
-        mean_z, log_var_z = self.encoding_parameters(x)
-        z = self.reparameterize(mean_z, log_var_z)
-        mean_recon_x, log_var_recon_x = self.decoding_parameters(z)
-        # recon_x = self.reparameterize(mean_recon_x, log_var_recon_x)
-        # recon_x, mean_z, log_var_z = self(x)
-        
-        #recon_loss = F.mse_loss(recon_x, x, reduction='mean') # <= BULLSHIT
-        recon_loss = -mean_field_log_prob(x - mean_recon_x, log_var_recon_x.exp()).mean()
-        kl_div = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1).mean()
-        return recon_loss, kl_div
-
-    def loss(self, x):
-        recon_loss, kl_div = self.loss_components(x)
-        return recon_loss + kl_div
-
-    def save_knowledge(self, filename):
-        save_dict = {
-            'model_state_dict': self.state_dict(),
-            'latent_mean': self.latent_mean,
-            'latent_std': self.latent_std
-        }
-        torch.save(save_dict, filename)
-
-    def load_knowledge(self, filename):
-        checkpoint = torch.load(filename, map_location=self.device)
-        self.load_state_dict(checkpoint['model_state_dict'])
-        self.latent_mean = checkpoint['latent_mean']
-        self.latent_std = checkpoint['latent_std']
-        self.eval()
     
-    def __run_epoch(self, data_loader, cur_kl_penalty, optimizer=None):
-        is_train = optimizer is not None
-        if is_train:
-            self.train()
-        else:
-            self.eval()
-        avg_recon_loss = 0.0
-        avg_kl_div = 0.0
-        for x in data_loader:
-            if is_train:
-                optimizer.zero_grad()
-            with torch.set_grad_enabled(is_train):
-                recon_loss, kl_div = self.loss_components(x.to(self.device))
-                loss = recon_loss + cur_kl_penalty * kl_div
-                if is_train:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=5)
-                    optimizer.step()
-            avg_recon_loss += recon_loss.item() * x.size(0)
-            avg_kl_div += kl_div.item() * x.size(0)
-        avg_recon_loss /= len(data_loader.dataset)
-        avg_kl_div /= len(data_loader.dataset)
-        return avg_recon_loss, avg_kl_div
-    
-    def __iw_log_marginal_estimate_batch(self, x, L):
+    def _iw_log_marginal_estimate_batch(self, x, L):
         self.eval()
         with torch.no_grad():
             mean_z, log_var_z = self.encoding_parameters(x)
             std_z = torch.exp(0.5 * log_var_z)
             m = torch.distributions.normal.Normal(mean_z, std_z)
             zs = m.sample((L,))
-            log_p_zs = self.latent_sampling_distribution.log_prob(zs)  # HEHE idea
+            log_p_zs = self.latent_sampling_distribution.log_prob(zs)
             mean_x_cond_zs, log_var_x_cond_zs = map(lambda t: t.unflatten(dim=0, sizes=(L, -1)),
                                                       self.decoding_parameters(zs.flatten(end_dim=1)))
-            # log_p_x_cond_zs = normal_density_log(dec_zs, torch.ones(self.data_dim, device=self.device), x)
             log_p_x_cond_zs = mean_field_log_prob(x - mean_x_cond_zs, log_var_x_cond_zs.exp())
-            # log_q_zs = normal_density_log(mean_z, std_z, zs)
             log_q_zs = mean_field_log_prob(zs - mean_z, log_var_z.exp())
             point_estimates = log_p_x_cond_zs + log_p_zs - log_q_zs
             return point_estimates
 
-    def __init_weights(self):
+    def init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 init.xavier_uniform_(m.weight)
                 init.constant_(m.bias, 0)
+
+    def save_knowledge(self, filename):
+        save_dict = {
+            'model_state_dict': self.state_dict()
+        }
+        torch.save(save_dict, filename)
+
+    def load_knowledge(self, filename):
+        checkpoint = torch.load(filename, map_location=self.device)
+        self.load_state_dict(checkpoint['model_state_dict'])
+        self.eval()
+
+
+## TODO: Merge with FlowTrainer
+class VAETrainer:
+    def __init__(self, model, target, **kwargs):
+        self.model = model
+        self.target = target
+        self.distribution_metric = kwargs.get("distribution_metric", SlicedDistributionMetric(WassersteinMetric1d(), self.model.data_dim))
+        self.device = kwargs.get("device", "cpu")
+        self.batch_size = kwargs.get("batch_size", 64)
+        self.grad_clip = kwargs.get("grad_clip", 1.0)
+        self.scheduler = kwargs.get("scheduler", None)
+        self.no_kl_penalty_epochs = kwargs.get("no_kl_penalty_epochs", 40)
+        self.kl_annealing_epochs = kwargs.get("kl_annealing_epochs", 500)
+        # optimizer choice
+        optimizer = kwargs.get("optimizer", "adam")
+        lr = kwargs.get("lr", 1e-3)
+        wd = kwargs.get("wd", 1e-4)
+        momentum = kwargs.get("momentum",0.9)
+        if isinstance(optimizer, torch.optim.Optimizer):
+            self.optimizer = optimizer
+        elif isinstance(optimizer, str):
+            if optimizer.lower() == "adam":
+                self.optimizer = torch.optim.Adam(
+                    model.parameters(), lr=lr, weight_decay=wd
+                )
+            elif optimizer.lower() == "sgd":
+                self.optimizer = torch.optim.SGD(
+                    model.parameters(), lr=lr, weight_decay=wd, momentum=momentum
+                )
+            else:
+                raise ValueError
+        # optimizer choice finished
+        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=20)
+
+        self.plot_interval = 50
+        self.evaluate_samples_interval = 50
+        self.n_eval_samples = 2000
+        self.epoch = 0
+        self.train_loss_hist = []
+        self.val_loss_hist = []
+        self.best_loss = float('inf')
+        self.sample_scores = []
+        self.cut_sample_scores = []
+        self.mh_sample_scores = []
+        self.best_model_weights = None
+        
+        self.model.to(self.device)
+        self.model.init_weights()
+
+    def fit(self, x_train, **kwargs):
+        x_val = kwargs.get("x_val", self.target.sample((x_train.shape[0] // 10,)))
+        n_epochs = kwargs.get("n_epochs", 800)
+        plot_interval = kwargs.get("plot_interval", n_epochs)
+        train_loader = dataloader_from_tensor(x_train, self.batch_size)
+        val_loader = dataloader_from_tensor(x_val, self.batch_size)
+
+        # filters & sample score
+        L = 64
+        beta = 1
+        cutoff_quantile = 0
+        model_log_prob_estimator = lambda x : self.model.iw_log_marginal_estimate(x, L=L, beta=beta, batch_L=32)
+        cutoff_log_prob = self.target.log_prob(x_train).quantile(cutoff_quantile)
+        sample_score = lambda sample: self.distribution_metric(x_train[:self.n_eval_samples], sample).item()
+
+        for epoch_id in range(n_epochs):
+            self.epoch += 1
+            assert(not torch.stack([p.isnan().any() for p in self.model.parameters()]).any())
+
+            train_loss = self.run_epoch(train_loader, is_train=True)
+            val_loss = self.run_epoch(val_loader, is_train=False)
+            self.train_loss_hist.append(train_loss)
+            self.val_loss_hist.append(val_loss)
+            
+            if val_loss < self.best_loss:
+                self.best_loss = val_loss
+                self.best_model_weights = self.model.state_dict()
+
+            if self.epoch % self.evaluate_samples_interval == 0:
+                self.model.eval()
+                model_samples = self.model.sample((self.n_eval_samples,))
+                self.model.train()
+                self.sample_scores.append(sample_score(model_samples))
+                cut_acc_rate, cut_samples = log_prob_cutoff_filter(self.target, model_samples, cutoff_log_prob, return_indicies=False)
+                if cut_samples.shape[0] == 0:
+                    cut_samples = torch.zeros((1, self.model.data_dim), device=self.device)
+                self.cut_sample_scores.append(sample_score(cut_samples))
+                mh_acc_rate, mh_samples = metropolis_hastings_filter(self.target, cut_samples, model_log_prob_estimator, return_indicies=False)
+                if mh_samples.shape[0] == 0:
+                    mh_samples = torch.zeros((1, self.model.data_dim), device=self.device)
+                self.mh_sample_scores.append(sample_score(mh_samples))
+            
+            if plot_interval is not None and (self.epoch % self.plot_interval == 0 or epoch_id == n_epochs - 1):
+                self.show_training_plot()
+
+            with self.warmup_scheduler.dampening():
+                if self.scheduler is not None:
+                    if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                        self.scheduler.step(val_loss)
+                    else:
+                        self.scheduler.step()
+            
+        self.model.load_state_dict(self.best_model_weights)
+        self.model.eval()
+
+    def run_epoch(self, data_loader, is_train):
+        self.model.train(is_train)
+        avg_loss = 0.0
+        for x in data_loader:
+            if is_train:
+                recon_loss, kl_div = self.loss_components(x)
+                intermediate_loss = recon_loss + self.kl_loss_factor() * kl_div
+                loss = recon_loss + kl_div
+                self.optimizer.zero_grad()
+                intermediate_loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+                self.optimizer.step()
+            else:
+                with torch.no_grad():
+                    loss = self.loss(x)
+            avg_loss += loss.item() * x.size(0)
+        avg_loss /= len(data_loader.dataset)
+        return avg_loss
+
+    def loss(self, x):
+        recon_loss, kl_div = self.loss_components(x)
+        return recon_loss + kl_div
+
+    def loss_components(self, x):
+        mean_z, log_var_z = self.model.encoding_parameters(x)
+        z = self.model.reparameterize(mean_z, log_var_z)
+        mean_recon_x, log_var_recon_x = self.model.decoding_parameters(z)
+        # BULLSHIT => recon_loss = F.mse_loss(recon_x, x, reduction='mean')
+        recon_loss = -mean_field_log_prob(x - mean_recon_x, log_var_recon_x.exp()).mean()
+        kl_div = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1).mean()
+        return recon_loss, kl_div
+
+    def kl_loss_factor(self):
+        if self.epoch <= self.no_kl_penalty_epochs:
+            return 0.5 / self.kl_annealing_epochs
+        return min(1., (self.epoch - self.no_kl_penalty_epochs) / self.kl_annealing_epochs)
+
+    def show_training_plot(self):
+        plot_from = 30
+        clear_output(wait=True)
+        fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
+
+        ax = axs[0][0]
+        epoch_list = np.arange(self.epoch) + 1
+        ax.plot(epoch_list[plot_from:], self.train_loss_hist[plot_from:], label='Train Loss')
+        ax.plot(epoch_list[plot_from:], self.val_loss_hist[plot_from:], label='Validation Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        ax.set_title('VAE Training')
+
+        ax = axs[1][0]
+        epoch_list = epoch_list[epoch_list % self.evaluate_samples_interval == 0]
+        ax.plot(epoch_list, self.sample_scores, label='Raw VAE samples')
+        ax.plot(epoch_list, self.cut_sample_scores, label='Log-prob cutoff Samples')
+        ax.plot(epoch_list, self.mh_sample_scores, label='MH samples')
+        ax.set_yscale('log')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel(self.distribution_metric.name())
+
+        def sample_scatter(ax, samples, **kwargs):
+            ax.scatter(*pl(samples[:, (0, 1)]), alpha=0.5, s=1.5, **kwargs)
+        
+        ax = axs[0][1]
+        target_samples = self.target.sample((self.n_eval_samples,))
+        sample_scatter(ax, target_samples, label='Target Samples')
+        good_xlim = ax.get_xlim()
+        good_ylim = ax.get_ylim()
+        sample_scatter(ax, self.model.sample((self.n_eval_samples,)), label='VAE Samples')
+        
+        ax = axs[1][1]
+        reconstructed_target = self.model.reconstruct(target_samples)
+        sample_scatter(ax, target_samples, label='Target Samples')
+        sample_scatter(ax, reconstructed_target, label='Reconstructed Target Samples', color='green')
+        
+        for ax in (axs[0][1], axs[1][1]):
+            ax.set_xlim(good_xlim)
+            ax.set_ylim(good_ylim)
+        for ax in axs.flatten():
+            ax.legend()
+        plt.show()
+        print(f'Epoch {self.epoch}')
+        print(f'\tTrain loss: {self.train_loss_hist[-1]:.4f}')
+        print(f'\tValidation loss: {self.val_loss_hist[-1]:.4f}')
+        print(f'\tLearning rate: {self.optimizer.param_groups[0]["lr"]}')
 
 
 def get_filename(model, target):

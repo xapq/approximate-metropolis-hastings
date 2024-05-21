@@ -38,7 +38,7 @@ class FlowTrainer:
 
         self.flow.to(self.device)
 
-    def train(self, n_steps=800, plot_interval=None):
+    def fit(self, n_steps=800, plot_interval=None):
         self.flow.train()
         for step_id in range(n_steps):
             self.step += 1
@@ -54,6 +54,7 @@ class FlowTrainer:
                 self.grad_clip,
             )
             self.optimizer.step()
+        self.flow.eval()
 
     # TODO: this can be a weighted sum of forward and backward KL divergences
     def loss(self, target_samples):
