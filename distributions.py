@@ -111,7 +111,6 @@ class Distribution(ABC):
 
         return fig, self.xlim, self.ylim
 
-
 def create_gaussian_mixture(means, cov_matricies):
     return td.MixtureSameFamily(
         td.Categorical(torch.ones(means.shape[0], device=means.device)),
@@ -139,6 +138,27 @@ def create_random_gaussian_mixture(dim, n_components, mean_lim=(0, 1), variance_
     component_variances = scale_to(torch.rand(n_components, dim, 1, generator=gen), variance_lim) * torch.eye(dim)
     cov_matricies = principal_components @ component_variances @ principal_components.transpose(-2, -1)
     return create_gaussian_mixture(means.to(device), cov_matricies.to(device))
+
+# returns (n_mixture_components, n_samples)-shaped tensor
+def scaled_mahalanobis_distance(gaussian_mixture, x):
+    batched_normal = gaussian_mixture.component_distribution
+    means = batched_normal.mean  # shape (n_comp, d)
+    precision_matricies = batched_normal.precision_matrix  # shape (n_comp, d, d)
+    deltas = x - means.unsqueeze(-2)  # shape (n_comp, n_samples, d)
+    squared_norm = torch.matmul(
+        deltas.unsqueeze(-2),  # shape (n_comp, n_samples, 1, d)
+        torch.matmul(
+            precision_matricies.unsqueeze(-3),  # shape (n_comp, 1, d, d)
+            deltas.unsqueeze(-1)  # shape (n_comp, n_sampled, d, 1)
+        )
+    )[..., 0, 0]
+    return (squared_norm / means.shape[-1]).sqrt()
+
+# return (n_components,) shaped tensor, containing number of samples within `k` stds for each component
+def get_mode_coverage(gaussian_mixture, x, k=2):
+    dists = scaled_mahalanobis_distance(gaussian_mixture, x)
+    counts = (dists < k).sum(axis=-1)
+    return counts
 
 
 class GaussianMixture(Distribution):
