@@ -295,7 +295,7 @@ class VAETrainer:
         return min(1., (self.epoch - self.no_kl_penalty_epochs) / self.kl_annealing_epochs)
 
     def show_training_plot(self):
-        plot_from = 30
+        plot_from = 40
         clear_output(wait=True)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
 
