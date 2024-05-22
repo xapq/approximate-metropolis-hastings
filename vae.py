@@ -11,12 +11,7 @@ import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from y_utils import *
 from distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
-
-
-def dataloader_from_tensor(X, batch_size):
-    dataset = TensorDataset(X)
-    dataloader = DataLoader(X, batch_size=batch_size, shuffle=True)
-    return dataloader
+from utilities import dataloader_from_tensor
 
 def SequentialFC(dims, activation):
     network = nn.Sequential(nn.Linear(dims[0], dims[1]))
@@ -105,6 +100,17 @@ class VAE(torch.nn.Module):
             torch.eye(self.latent_dim, device=self.device) * std_factor ** 2
         )
 
+    def adapt_latent_sampling_distribution(self, x, std_factor=None):
+        if std_factor is not None:
+            self.std_factor = std_factor
+        z = self.encode(x)
+        latent_mean = torch.mean(z, dim=0)
+        latent_std = torch.std(z, dim=0)
+        self.latent_sampling_distribution = torch.distributions.MultivariateNormal(
+            latent_mean, 
+            latent_std.diag() * self.std_factor ** 2
+        )
+
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
     def iw_log_marginal_estimate(self, x, L, beta=1, batch_L=64):
@@ -179,10 +185,9 @@ class VAETrainer:
             else:
                 raise ValueError
         # optimizer choice finished
-        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=20)
+        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=10)
 
-        self.plot_interval = 50
-        self.evaluate_samples_interval = 50
+        self.evaluate_samples_interval = 2000
         self.n_eval_samples = 2000
         self.epoch = 0
         self.train_loss_hist = []
@@ -238,7 +243,8 @@ class VAETrainer:
                     mh_samples = torch.zeros((1, self.model.data_dim), device=self.device)
                 self.mh_sample_scores.append(sample_score(mh_samples))
             
-            if plot_interval is not None and (self.epoch % self.plot_interval == 0 or epoch_id == n_epochs - 1):
+            if plot_interval is not None and (self.epoch % plot_interval == 0 or epoch_id == n_epochs - 1):
+                # self.model.adapt_latent_sampling_distribution(x_train)
                 self.show_training_plot()
 
             with self.warmup_scheduler.dampening():
@@ -285,7 +291,7 @@ class VAETrainer:
 
     def kl_loss_factor(self):
         if self.epoch <= self.no_kl_penalty_epochs:
-            return 0.5 / self.kl_annealing_epochs
+            return 0.01
         return min(1., (self.epoch - self.no_kl_penalty_epochs) / self.kl_annealing_epochs)
 
     def show_training_plot(self):

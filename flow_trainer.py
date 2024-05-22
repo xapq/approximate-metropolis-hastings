@@ -5,18 +5,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
 from y_utils import pl
+from utilities import dataloader_from_tensor
 
 
 class FlowTrainer:
     def __init__(self, flow, target, **kwargs):
-        self.flow = flow
+        self.model = flow
         self.target = target
         self.device = kwargs.get("device", "cpu")
         self.batch_size = kwargs.get("batch_size", 64)
         self.grad_clip = kwargs.get("grad_clip", 1.0)
-        self.step = 0
-        self.loss_hist = []
-        self.plot_interval = 50
+        self.scheduler = kwargs.get("scheduler", None)
+        self.epoch = 0
+        self.train_loss_hist = []
+        self.val_loss_hist = []
         
         optimizer = kwargs.get("optimizer", "adam")
         lr = kwargs.get("lr", 1e-3)
@@ -36,50 +38,79 @@ class FlowTrainer:
             else:
                 raise ValueError
 
-        self.flow.to(self.device)
+        self.model.to(self.device)
 
-    def fit(self, n_steps=800, plot_interval=None):
-        self.flow.train()
-        for step_id in range(n_steps):
-            self.step += 1
-            target_samples = self.target.sample((self.batch_size,))
-            loss = self.loss(target_samples)
-            self.loss_hist.append(loss.item())
-            if plot_interval is not None and (self.step % self.plot_interval == 0 or step_id == n_steps - 1):
+    def fit(self, x_train, **kwargs):
+        x_val = kwargs.get("x_val", self.target.sample((x_train.shape[0] // 10,)))
+        n_epochs = kwargs.get("n_epochs", 800)
+        plot_interval = kwargs.get("plot_interval", n_epochs)
+        train_loader = dataloader_from_tensor(x_train, self.batch_size)
+        val_loader = dataloader_from_tensor(x_val, self.batch_size)
+        
+        for epoch_id in range(n_epochs):
+            self.epoch += 1
+            train_loss = self.run_epoch(train_loader, is_train=True)
+            val_loss = self.run_epoch(val_loader, is_train=False)
+            self.train_loss_hist.append(train_loss)
+            self.val_loss_hist.append(val_loss)
+            if self.epoch % plot_interval == 0 or epoch_id == n_epochs - 1:
                 self.show_training_plot()
-            self.optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                self.flow.parameters(),
-                self.grad_clip,
-            )
-            self.optimizer.step()
-        self.flow.eval()
+            if self.scheduler is not None:
+                if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                    self.scheduler.step(val_loss)
+                else:
+                    self.scheduler.step()
+        self.model.eval()
+
+    def run_epoch(self, data_loader, is_train):
+        self.model.train(is_train)
+        avg_loss = 0.0
+        for x in data_loader:
+            if is_train:
+                loss = self.loss(x)
+                self.optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+                self.optimizer.step()
+            else:
+                with torch.no_grad():
+                    loss = self.loss(x)
+            avg_loss += loss.item() * x.size(0)
+        avg_loss /= len(data_loader.dataset)
+        return avg_loss
 
     # TODO: this can be a weighted sum of forward and backward KL divergences
     def loss(self, target_samples):
-        return -self.flow.log_prob(target_samples).mean()
+        return -self.model.log_prob(target_samples).mean()
 
     def show_training_plot(self):
         clear_output(wait=True)
         fig, axs = plt.subplots(figsize=(10, 5), ncols=2)
 
         ax = axs[0]
-        ax.plot(np.arange(self.step) + 1, self.loss_hist)
+        plot_from = 5
+        ax.plot(np.arange(plot_from, self.epoch) + 1, self.train_loss_hist[plot_from:], label='Train')
+        ax.plot(np.arange(plot_from, self.epoch) + 1, self.val_loss_hist[plot_from:], label='Validation')
         ax.set_xlabel('Step')
-        ax.set_ylabel('Loss')
-        ax.set_title('Flow Training')
+        ax.set_ylabel('Negative Log Likelihood')
+        ax.legend()
 
         n_plot_samples = 2000
         proj_dims = (0, 1)
         def sample_scatter(sample, **kwargs):
             axs[1].scatter(*pl(sample[:, proj_dims]), alpha=0.5, s=1.5, **kwargs)
         sample_scatter(self.target.sample((n_plot_samples,)), label='Target Samples')
-        sample_scatter(self.flow.sample((n_plot_samples,)), label='Flow Samples')
+        good_xlim = axs[1].get_xlim()
+        good_ylim = axs[1].get_ylim()
+        sample_scatter(self.model.sample((n_plot_samples,)), label='Flow Samples')
+        axs[1].set_xlim(good_xlim)
+        axs[1].set_ylim(good_ylim)
         axs[1].legend()
-        
+
+        fig.suptitle('Flow Training')
         plt.show()
-        print(f'Step {self.step}')
-        print(f'\tLoss: {self.loss_hist[-1]:.4f}')
+        print(f'Epoch {self.epoch}')
+        print(f'\tTrain Loss: {self.train_loss_hist[-1]:.4f}')
+        print(f'\tValidation Loss: {self.val_loss_hist[-1]:.4f}')
         print(f'\tLearning rate: {self.optimizer.param_groups[0]["lr"]}')
             
