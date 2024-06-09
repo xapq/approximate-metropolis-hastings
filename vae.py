@@ -185,7 +185,8 @@ class VAETrainer:
             else:
                 raise ValueError
         # optimizer choice finished
-        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=10)
+        warmup_period = kwargs.get("warmup_period", 10)
+        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=warmup_period)
 
         self.evaluate_samples_interval = 2000
         self.n_eval_samples = 2000
@@ -295,14 +296,14 @@ class VAETrainer:
         return min(1., (self.epoch - self.no_kl_penalty_epochs) / self.kl_annealing_epochs)
 
     def show_training_plot(self):
-        plot_from = 30
+        plot_from = 40
         clear_output(wait=True)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
 
         ax = axs[0][0]
         epoch_list = np.arange(self.epoch) + 1
         ax.plot(epoch_list[plot_from:], self.train_loss_hist[plot_from:], label='Train Loss')
-        ax.plot(epoch_list[plot_from:], self.val_loss_hist[plot_from:], label='Validation Loss')
+        # ax.plot(epoch_list[plot_from:], self.val_loss_hist[plot_from:], label='Validation Loss')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss')
         ax.set_title('VAE Training')

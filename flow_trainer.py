@@ -19,6 +19,8 @@ class FlowTrainer:
         self.epoch = 0
         self.train_loss_hist = []
         self.val_loss_hist = []
+        self.best_val_loss = float("inf")
+        self.best_model_weights = None
         
         optimizer = kwargs.get("optimizer", "adam")
         lr = kwargs.get("lr", 1e-3)
@@ -53,6 +55,9 @@ class FlowTrainer:
             val_loss = self.run_epoch(val_loader, is_train=False)
             self.train_loss_hist.append(train_loss)
             self.val_loss_hist.append(val_loss)
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                self.best_model_weights = self.model.state_dict()
             if self.epoch % plot_interval == 0 or epoch_id == n_epochs - 1:
                 self.show_training_plot()
             if self.scheduler is not None:
@@ -60,6 +65,7 @@ class FlowTrainer:
                     self.scheduler.step(val_loss)
                 else:
                     self.scheduler.step()
+        self.model.load_state_dict(self.best_model_weights)
         self.model.eval()
 
     def run_epoch(self, data_loader, is_train):
@@ -91,6 +97,7 @@ class FlowTrainer:
         plot_from = 5
         ax.plot(np.arange(plot_from, self.epoch) + 1, self.train_loss_hist[plot_from:], label='Train')
         ax.plot(np.arange(plot_from, self.epoch) + 1, self.val_loss_hist[plot_from:], label='Validation')
+        ax.set_ylim(min(min(self.val_loss_hist), min(self.train_loss_hist)), self.train_loss_hist[plot_from])
         ax.set_xlabel('Step')
         ax.set_ylabel('Negative Log Likelihood')
         ax.legend()
