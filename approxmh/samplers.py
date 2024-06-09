@@ -30,7 +30,7 @@ def metropolis_hastings_with_noise(target, proposal, n_samples, burn_in=100, noi
     return acc_rate, samples[burn_in:].numpy(force=True)
 
 
-def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, max_rejections=None, max_density_ratio=None, visualize=False, return_indicies=True):
+def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, max_density_ratio=None, visualize=False):
     '''
     Parameters
     ----------
@@ -44,8 +44,6 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         Number of initial MH samples to discard. 1/20th of the samples by default
     n_estimates : positive integer
         Number of times to evaluate the proposal log-probability estimate.
-    max_rejections : positive integer or None
-        Maximum number of rejections in a row.
     Returns
     -------
     float
@@ -56,56 +54,55 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     n_samples = proposal_samples.shape[0]
     if burn_in is None:
         burn_in = n_samples // 20
-    if max_rejections is None:
-        max_rejections = n_samples
     
     target_log_prob = target.log_prob(proposal_samples)
     proposal_log_probs = torch.stack([proposal_log_prob_estimator(proposal_samples) for _ in range(n_estimates)], dim=-1)
-    density_ratios = target_log_prob.unsqueeze(-1) - proposal_log_probs.to(target_log_prob.device)
-    sample_indicies = torch.arange(n_samples)
+    density_ratios = target_log_prob.unsqueeze(-1) - proposal_log_probs
     
     if max_density_ratio is not None:
         non_outlier = density_ratios.median(dim=1).values < max_density_ratio
-        sample_indicies = sample_indicies[non_outlier.to('cpu')]
-        # density_ratios = density_ratios[non_outlier]
-        print(f'MH discarded {n_samples - sample_indicies.shape[0]} outlier(s)')
-        n_samples = sample_indicies.shape[0]
-        
+        density_ratios = density_ratios[non_outlier]
+        target_log_prob = target_log_prob[non_outlier]
+        proposal_log_probs = proposal_log_probs[non_outlier]
+        proposal_samples = proposal_samples[non_outlier]
+        new_n_samples = density_ratios.shape[0]
+        print(f'MH discarded {n_samples - new_n_samples} outlier(s)')
+        n_samples = new_n_samples
+
+    sample_indicies = torch.arange(n_samples)
     acc_noise = torch.rand(n_samples)
-    
-    n_accepted = 0
+    density_ratios = density_ratios.to('cpu')
+
     for t in range(1, n_samples):
         index_last = sample_indicies[t - 1]
-        cur_density_ratio = density_ratios[sample_indicies[t]][0]
+        cur_density_ratio = density_ratios[t][0]
         last_density_ratio = density_ratios[index_last][(t - index_last) % n_estimates]
         accept_prob = torch.exp(
             cur_density_ratio - last_density_ratio
         )
-        if acc_noise[t] < accept_prob or t - index_last > max_rejections:  # accept
-            n_accepted += (t >= burn_in)
-        else:  # reject
+        if acc_noise[t] > accept_prob:  # reject
             sample_indicies[t] = index_last
+    
+    n_accepted = torch.ne(sample_indicies[burn_in:], sample_indicies[burn_in-1 : -1]).sum().item()
     acc_rate = n_accepted / (n_samples - burn_in)
     
     if visualize:
         fig, ax = plt.subplots(figsize=(16, 8))
-        log_ratios_accepted = (target_log_prob - proposal_log_probs[..., 0])[sample_indicies]
-        log_ratios_all = target_log_prob - proposal_log_probs[..., 0]
-        #ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_accepted.exp()), label='Accepted sample target/proposal', zorder=3)
-        #ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_all.exp()), label='Proposed sample target/proposal')
-        #ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density')
-        for i in range(n_estimates):
-            ax.scatter(np.arange(1, n_samples + 1), to_numpy(proposal_log_probs[..., i].exp()), label='Sample proposal density', color='tab:red', zorder=4)
+        log_ratios_accepted = (density_ratios[..., 0])[sample_indicies]
+        log_ratios_all = density_ratios[..., 0]
+        ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_accepted.exp()), label='Accepted sample target/proposal', zorder=3)
+        ax.plot(np.arange(1, n_samples + 1), to_numpy(log_ratios_all.exp()), label='Proposed sample target/proposal')
+        ax.plot(np.arange(1, n_samples + 1), to_numpy(target_log_prob.exp()), label='Sample target density')
+        #for i in range(n_estimates):
+        #    ax.scatter(np.arange(1, n_samples + 1), to_numpy(proposal_log_probs[..., i].exp()), label='Sample proposal density', color='tab:red', zorder=4)
         ax.set_yscale('log')
-        # ax.set_ylabel('Target / Proposal log-ratio')
+        ax.set_ylabel('Target / Proposal log-ratio')
         ax.set_xlabel('Sample #')
         ax.axvline(x=burn_in, label='Burn-in', color='r', linestyle='--')
         ax.set_title(f'Metropolis-Hastings Diagnostics\nA/R={acc_rate * 100:0.1f}%')
         ax.legend()
 
     mh_indicies = sample_indicies[burn_in:]
-    if return_indicies:
-        return acc_rate, mh_indicies
     return acc_rate, proposal_samples[mh_indicies]
 
 

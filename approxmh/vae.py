@@ -112,9 +112,12 @@ class VAE(torch.nn.Module):
             latent_std.diag() * self.std_factor ** 2
         )
 
+    def log_prob(self, x, **kwargs):
+        return self.iw_log_marginal_estimate(x, **kwargs)
+
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
-    def iw_log_marginal_estimate(self, x, L, beta=1, batch_L=64):
+    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64):
         point_estimates = []
         for i in range(0, L, batch_L):
             point_estimates.append(self._iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
