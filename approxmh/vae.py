@@ -6,12 +6,13 @@ from torch.nn import functional as F
 import torch.nn.init as init
 import numpy as np
 import math
-from samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
-from y_utils import *
-from distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
-from utilities import dataloader_from_tensor
+
+from .y_utils import *
+from .distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
+from .utilities import dataloader_from_tensor
+from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 
 def SequentialFC(dims, activation):
     network = nn.Sequential(nn.Linear(dims[0], dims[1]))

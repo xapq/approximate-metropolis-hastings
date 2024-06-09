@@ -5,7 +5,8 @@ from jax import numpy as jnp
 from jax.scipy.stats import gaussian_kde
 import torch
 import ot
-from utilities import torch_to_jax
+
+from .utilities import torch_to_jax
 
 
 class DistributionMetric(ABC):

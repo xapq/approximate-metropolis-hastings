@@ -4,8 +4,9 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from IPython.display import clear_output
-from y_utils import pl
-from utilities import dataloader_from_tensor
+
+from .y_utils import pl
+from .utilities import dataloader_from_tensor
 
 
 class FlowTrainer:

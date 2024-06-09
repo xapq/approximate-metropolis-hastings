@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-
 import numpy as np
 import numpy.random as rng
 from numpy.random import default_rng

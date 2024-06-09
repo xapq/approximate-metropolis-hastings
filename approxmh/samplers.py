@@ -3,7 +3,8 @@ from scipy.stats import bernoulli
 import torch
 import numbers
 import matplotlib.pyplot as plt
-from y_utils import *
+
+from .y_utils import *
 
 
 # Returns acceptance rate and samples
