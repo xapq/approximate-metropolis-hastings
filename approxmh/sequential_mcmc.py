@@ -29,6 +29,7 @@ class MarkovKernel(ABC):
         '''
         raise NotImplementedError
 
+
 class ULAKernel(MarkovKernel):
     def __init__(self, stationary_distribution, time_step):
         super().__init__()
@@ -45,14 +46,12 @@ class ULAKernel(MarkovKernel):
         assert(x.shape == y.shape)
         minus_grad_U = self._grad_negative_energy(x)
         standard_normal = torch.distributions.Normal(0., 1.)
-        return standard_normal.log_prob((y - x - self.time_step * minus_grad_U) / math.sqrt(2 * self.time_step)).view(x.shape[0], -1).sum(axis=1)
+        return standard_normal.log_prob((y - x - self.time_step * minus_grad_U) / math.sqrt(2 * self.time_step)).sum(axis=-1)
 
     def _grad_negative_energy(self, x):
-        x = x.clone()
-        x.requires_grad_()
-        x.grad = None
-        self.negative_energy(x).sum().backward()
-        return x.grad
+        x = x.clone().detach().requires_grad_(True)
+        sum_negative_energy = self.negative_energy(x).sum()
+        return torch.autograd.grad(sum_negative_energy, x)[0]
 
 
 def run_annealed_importance_sampling(
@@ -81,6 +80,7 @@ def run_annealed_importance_sampling(
         Number of particles
     transition_kernel
         Function that returns a Markov kernel with a given stationary distribution
+
     Returns
     -------
     (torch.tensor, torch.tensor)
@@ -101,30 +101,20 @@ def run_annealed_importance_sampling(
         X_next = X
         X_next = M_t.step(X_next)
         # Incremental importance weights
+        # print('adding', logW.shape, X_next.shape, M_t.log_prob(X_next, X).shape)
         logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next)
         X = X_next
     logW += p_n.log_prob(X)
     return logW, X
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+def ais_ula_log_mean_weight(
+    p_0,
+    p_n,
+    n_steps : int,
+    n_particles : int,
+    ula_time_step,
+):
+    transition_kernel = lambda distr: ULAKernel(distr, ula_time_step)
+    log_weights, samples = run_annealed_importance_sampling(p_0, p_n, n_steps, n_particles, transition_kernel)
+    return torch.logsumexp(log_weights, axis=0)

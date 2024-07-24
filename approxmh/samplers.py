@@ -48,8 +48,8 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     -------
     float
         Acceptance rate
-    1d integer torch.tensor
-        Indicies of proposal samples chosen by the Metropolis-Hastings algorithm
+    torch.tensor
+        Samples from the Metropolis-Hastings algorithm
     '''
     n_samples = proposal_samples.shape[0]
     if burn_in is None:

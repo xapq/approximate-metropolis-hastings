@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from easydict import EasyDict as edict
 from matplotlib import pyplot as plt
 from torch import nn
+import math
 
 # from .linear_regression import RegressionDataset
 # from .logistic_regression import ClassificationDataset
@@ -116,6 +117,7 @@ def create_gaussian_mixture(means, cov_matricies):
         td.MultivariateNormal(means, cov_matricies)
     )
 
+
 def create_gaussian_lattice(shape, step, variance, device='cpu'):
     dim = len(shape)
     cov_matrix = variance * torch.eye(dim, device=device)
@@ -158,6 +160,38 @@ def get_mode_coverage(gaussian_mixture, x, k=2):
     dists = scaled_mahalanobis_distance(gaussian_mixture, x)
     counts = (dists < k).sum(axis=-1)
     return counts
+
+
+class IndependentMultivariateNormal:
+    def __init__(self, mean, std, **kwargs):
+        self.mean = mean  # (*batch_dims, data_dim)
+        self.std = std
+        self.batch_dims = self.mean.shape[:-1]
+        self.data_dim = self.mean.shape[-1]
+        self.batch_idxs = torch.arange(len(self.batch_dims))
+
+    # takes (*batch_dims, *sample_shape, data_dim)-tensor and returns (*batch_dims, *sample_shape)-tensor
+    def log_prob(self, x):
+        # x = x.movedim(self.batch_idxs, len(sample_shape) + self.batch_idxs)
+        log_density = (
+            -((x - self.mean) ** 2) / (2 * self.std ** 2)
+            - self.std.log()
+            - math.log(math.sqrt(2 * math.pi))
+        ).sum(axis=-1)
+        # log_density = log_density.movedim(len(sample_shape) + self.batch_idxs, self.batch_idxs)
+        return log_density
+    
+    # returns (*batch_dims, *sample_shape, data_dim)-shaped tensor
+    def rsample(self, sample_shape=torch.Size([])):
+        x = torch.randn(*sample_shape, *self.batch_dims, self.data_dim, device=self.std.device)
+        x *= self.std
+        x += self.mean
+        # x = x.movedim(len(sample_shape) + self.batch_idxs, self.batch_idxs)
+        return x
+
+    def sample(self, sample_shape=torch.Size([])):
+        with torch.no_grad():
+            return self.rsample(sample_shape)
 
 
 class GaussianMixture(Distribution):
@@ -257,51 +291,6 @@ class GaussianMixture(Distribution):
         )
 
         return fig, xlim, ylim
-
-
-class IndependentNormal(Distribution):
-    def __init__(self, dim, **kwargs):
-        super().__init__(**kwargs)
-        self.device = kwargs.get("device", "cpu")
-        self.dim = dim
-        self.loc = kwargs.get("loc", torch.zeros(self.dim))
-        self.scale = kwargs.get("scale", 1.0) # >:( ! 1 -> 1.0 !!
-        self.distribution = torch.distributions.Normal(
-            loc=self.loc,
-            scale=self.scale,
-        )
-
-    def log_prob(self, z, x=None):
-        log_density = (self.distribution.log_prob(z.to(self.device))).sum(
-            dim=-1,
-        )
-        return log_density
-
-    def sample(self, n):
-        return self.distribution.sample(n)
-
-    def energy(self, z, x=None):
-        return -self.log_prob(z, x)
-
-
-def init_independent_normal(scale, n_dim, device, loc=0.0):
-    loc = loc * torch.ones(n_dim).to(device)
-    scale = scale * torch.ones(n_dim).to(device)
-    target_args = edict()
-    target_args.device = device
-    target_args.loc = loc
-    target_args.scale = scale
-    target = IndependentNormal(n_dim, **target_args)
-    return target
-
-
-def init_independent_normal_scale(scales, locs, device):
-    target_args = edict()
-    target_args.device = device
-    target_args.loc = locs.to(device)
-    target_args.scale = scales.to(device)
-    target = IndependentNormal(**target_args)
-    return target
 
 
 class Cauchy(Distribution):

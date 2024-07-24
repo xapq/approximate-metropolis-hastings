@@ -11,8 +11,11 @@ from IPython.display import clear_output
 
 from .y_utils import *
 from .distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
+from .distributions import IndependentMultivariateNormal
 from .utilities import dataloader_from_tensor
 from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
+from .sequential_mcmc import ais_ula_log_mean_weight, DensityMixture
+
 
 def SequentialFC(dims, activation):
     network = nn.Sequential(nn.Linear(dims[0], dims[1]))
@@ -23,6 +26,13 @@ def SequentialFC(dims, activation):
         network.append(nn.Linear(dims[i], dims[i + 1]))
     return network        
 
+class UnnormalizedPosterior:
+    def __init__(self, model, x):
+        self.model = model
+        self.x = x
+
+    def log_prob(self, z):
+        return self.model.prior.log_prob(z) + self.model.decoder_distribution(self.x).log_prob(z)
 
 '''
 Variational Autoencoder
@@ -61,6 +71,18 @@ class VAE(torch.nn.Module):
     def reconstruct(self, x):
         return self.decode(self.encode(x))
 
+    # q(z|x)
+    def encoder_distribution(self, x):
+        mean_z, log_var_z = self.encoding_parameters(x)
+        std_z = torch.exp(0.5 * log_var_z)
+        return IndependentMultivariateNormal(mean_z, std_z)
+
+    # p(x|z)
+    def decoder_distribution(self, z):
+        mean_x, log_var_x = self.decoding_parameters(z)
+        std_x = torch.exp(0.5 * log_var_x)
+        return IndependentMultivariateNormal(mean_x, std_x)
+
     # parameters of the distribution q(z|x)
     def encoding_parameters(self, x):
         mean_z, log_var_z = self.encoder(x).chunk(2, dim=-1)
@@ -79,9 +101,10 @@ class VAE(torch.nn.Module):
 
     # sample distribution p(x|z)
     def decode(self, z):
-        mean_x, log_var_x = self.decoding_parameters(z)
-        x = self.reparameterize(mean_x, log_var_x)
-        return x
+        #mean_x, log_var_x = self.decoding_parameters(z)
+        #x = self.reparameterize(mean_x, log_var_x)
+        #return x
+        return self.decoder_distribution(z).rsample((1,)).squeeze(0)
 
     def sample(self, sample_shape=(1,)):
         z = self.sample_latent(sample_shape)
@@ -93,7 +116,7 @@ class VAE(torch.nn.Module):
     def sample_latent(self, sample_shape=(1,)):
         return self.latent_sampling_distribution.sample(sample_shape)
 
-    ### standard deviation multipler for ancestral sampling
+    ### standard deviation multiplier for ancestral sampling
     def set_std_factor(self, std_factor):
         self.std_factor = std_factor
         self.latent_sampling_distribution = torch.distributions.MultivariateNormal(
@@ -111,9 +134,16 @@ class VAE(torch.nn.Module):
             latent_mean, 
             latent_std.diag() * self.std_factor ** 2
         )
-
-    def log_prob(self, x, **kwargs):
-        return self.iw_log_marginal_estimate(x, **kwargs)
+    
+    def ais_ula_log_marginal_estimate(self, x, n_steps=10, n_particles=512, ula_time_step=None):
+        log_ml_estimate = ais_ula_log_mean_weight(
+            self.encoder_distribution(x), 
+            UnnormalizedPosterior(self, x),
+            n_steps,
+            n_particles,
+            ula_time_step
+        )
+        return log_ml_estimate
 
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
@@ -128,15 +158,13 @@ class VAE(torch.nn.Module):
     def _iw_log_marginal_estimate_batch(self, x, L):
         self.eval()
         with torch.no_grad():
-            mean_z, log_var_z = self.encoding_parameters(x)
-            std_z = torch.exp(0.5 * log_var_z)
-            m = torch.distributions.normal.Normal(mean_z, std_z)
-            zs = m.sample((L,))
+            encoder_dist = self.encoder_distribution(x)
+            zs = encoder_dist.sample((L,))
             log_p_zs = self.latent_sampling_distribution.log_prob(zs)
             mean_x_cond_zs, log_var_x_cond_zs = map(lambda t: t.unflatten(dim=0, sizes=(L, -1)),
                                                       self.decoding_parameters(zs.flatten(end_dim=1)))
             log_p_x_cond_zs = mean_field_log_prob(x - mean_x_cond_zs, log_var_x_cond_zs.exp())
-            log_q_zs = mean_field_log_prob(zs - mean_z, log_var_z.exp())
+            log_q_zs = encoder_dist.log_prob(zs)
             point_estimates = log_p_x_cond_zs + log_p_zs - log_q_zs
             return point_estimates
 
