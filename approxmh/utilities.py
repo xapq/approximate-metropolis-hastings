@@ -40,15 +40,15 @@ def dataloader_from_tensor(X, batch_size):
 def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def plot_2d_torch_function(ax, func, xlim, ylim, d, **kwargs):
+def plot_2d_torch_function(ax, func, xlim, ylim, d, device='cpu', **kwargs):
     x = np.linspace(*xlim, d)
     y = np.linspace(*ylim, d)
     X, Y = np.meshgrid(x, y)
     X, Y = torch.tensor(X), torch.tensor(Y)
-    points = torch.zeros(d, d, 2)
+    points = torch.zeros(d, d, 2, device=device)
     points[..., 0] = X
     points[..., 1] = Y
     values = func(points.flatten(end_dim=1)).unflatten(dim=0, sizes=(d, d))
-    img = ax.imshow(values.detach().cpu(), origin='lower', extent=[*xlim, *ylim], aspect='auto')
+    img = ax.imshow(values.detach().cpu(), origin='lower', extent=[*xlim, *ylim], aspect='auto', **kwargs)
     return img
 

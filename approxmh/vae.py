@@ -32,7 +32,12 @@ class UnnormalizedPosterior:
         self.x = x
 
     def log_prob(self, z):
-        return self.model.prior.log_prob(z) + self.model.decoder_distribution(self.x).log_prob(z)
+        print(z.shape)
+        return self.model.prior.log_prob(z) + self.model.decoder_distribution(z).log_prob(self.x)
+
+    def sample(self, sample_shape=None):
+        print('Nice try!')
+        raise NotImplementedError
 
 '''
 Variational Autoencoder
@@ -71,8 +76,14 @@ class VAE(torch.nn.Module):
     def reconstruct(self, x):
         return self.decode(self.encode(x))
 
+    # p(z|x)
+    def posterior(self, x):
+        return UnnormalizedPosterior(self, x)
+
     # q(z|x)
     def encoder_distribution(self, x):
+        if len(x.shape) == 1:  # non-batched input
+            x = x.unsqueeze(0)
         mean_z, log_var_z = self.encoding_parameters(x)
         std_z = torch.exp(0.5 * log_var_z)
         return IndependentMultivariateNormal(mean_z, std_z)
@@ -90,7 +101,16 @@ class VAE(torch.nn.Module):
 
     # parameters of the distribution p(x|z)
     def decoding_parameters(self, z):
-        mean_x, log_var_x = self.decoder(z).chunk(2, dim=-1)
+        if len(z.shape) == 1:  
+            raise ValueError("Cannot implicitly handle non-batched input. Use unsqueeze(dim=0)")   
+        # Remember and flatten original batch dimensions 
+        batch_dims = z.shape[:-1]
+        z = z.flatten(end_dim=-2)
+        # Decoder network
+        mean_and_log_var_x = self.decoder(z).chunk(2, dim=-1)
+        # Restore original batch dimensions
+        mean_x, log_var_x = map(lambda t: t.unflatten(dim=0, sizes=batch_dims),
+                                mean_and_log_var_x)
         return mean_x, log_var_x
 
     # sample distribution q(z|x)
@@ -161,9 +181,8 @@ class VAE(torch.nn.Module):
             encoder_dist = self.encoder_distribution(x)
             zs = encoder_dist.sample((L,))
             log_p_zs = self.latent_sampling_distribution.log_prob(zs)
-            mean_x_cond_zs, log_var_x_cond_zs = map(lambda t: t.unflatten(dim=0, sizes=(L, -1)),
-                                                      self.decoding_parameters(zs.flatten(end_dim=1)))
-            log_p_x_cond_zs = mean_field_log_prob(x - mean_x_cond_zs, log_var_x_cond_zs.exp())
+            decoder_dists = self.decoder_distribution(zs)
+            log_p_x_cond_zs = decoder_dists.log_prob(x)
             log_q_zs = encoder_dist.log_prob(zs)
             point_estimates = log_p_x_cond_zs + log_p_zs - log_q_zs
             return point_estimates
