@@ -32,7 +32,6 @@ class UnnormalizedPosterior:
         self.x = x
 
     def log_prob(self, z):
-        print(z.shape)
         return self.model.prior.log_prob(z) + self.model.decoder_distribution(z).log_prob(self.x)
 
     def sample(self, sample_shape=None):
@@ -121,9 +120,6 @@ class VAE(torch.nn.Module):
 
     # sample distribution p(x|z)
     def decode(self, z):
-        #mean_x, log_var_x = self.decoding_parameters(z)
-        #x = self.reparameterize(mean_x, log_var_x)
-        #return x
         return self.decoder_distribution(z).rsample((1,)).squeeze(0)
 
     def sample(self, sample_shape=(1,)):
@@ -155,24 +151,28 @@ class VAE(torch.nn.Module):
             latent_std.diag() * self.std_factor ** 2
         )
     
-    def ais_ula_log_marginal_estimate(self, x, n_steps=10, n_particles=512, ula_time_step=None):
+    def ais_ula_log_marginal_estimate(self, x, n_steps=10, n_particles=512, ula_time_step=None, return_variance=False):
         log_ml_estimate = ais_ula_log_mean_weight(
             self.encoder_distribution(x), 
             UnnormalizedPosterior(self, x),
             n_steps,
             n_particles,
-            ula_time_step
+            ula_time_step,
+            return_variance
         )
         return log_ml_estimate
 
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
-    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64):
+    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64, return_variance=False):
         point_estimates = []
         for i in range(0, L, batch_L):
             point_estimates.append(self._iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
         point_estimates = torch.cat(point_estimates)
-        estimate = (torch.logsumexp(point_estimates.double() / beta, dim=0) - np.log(point_estimates.shape[0])) * beta
+        estimate = (torch.logsumexp(point_estimates.double() / beta, dim=0) - np.log(L)) * beta
+        if return_variance:
+            var = torch.var(point_estimates, dim=0)
+            return estimate, var
         return estimate
     
     def _iw_log_marginal_estimate_batch(self, x, L):

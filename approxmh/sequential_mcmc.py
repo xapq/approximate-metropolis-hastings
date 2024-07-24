@@ -43,7 +43,6 @@ class ULAKernel(MarkovKernel):
         return y
 
     def log_prob(self, x, y):
-        assert(x.shape == y.shape)
         minus_grad_U = self._grad_negative_energy(x)
         standard_normal = torch.distributions.Normal(0., 1.)
         return standard_normal.log_prob((y - x - self.time_step * minus_grad_U) / math.sqrt(2 * self.time_step)).sum(axis=-1)
@@ -114,7 +113,12 @@ def ais_ula_log_mean_weight(
     n_steps : int,
     n_particles : int,
     ula_time_step,
+    return_variance=False
 ):
     transition_kernel = lambda distr: ULAKernel(distr, ula_time_step)
     log_weights, samples = run_annealed_importance_sampling(p_0, p_n, n_steps, n_particles, transition_kernel)
-    return torch.logsumexp(log_weights, axis=0)
+    log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(n_particles)
+    if return_variance:
+        weight_variance = torch.var(log_weights.exp(), axis=0)
+        return log_mean_weight, weight_variance
+    return log_mean_weight
