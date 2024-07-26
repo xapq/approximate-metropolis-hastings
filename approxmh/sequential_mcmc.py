@@ -59,6 +59,7 @@ def run_annealed_importance_sampling(
     n_steps : int,
     n_particles : int,
     transition_kernel,
+    n_kernel_steps=1
 ):
     '''
     Use annealed importance sampling to generate a weighted sample from p_N using samples from p_0
@@ -75,6 +76,8 @@ def run_annealed_importance_sampling(
         Unnormalized target distribution from which we wish to sample
     n_steps
         Number of interpolating steps
+    n_kernel_steps
+        Number of times the transition kernel is applied at each interpolating step
     n_particles
         Number of particles
     transition_kernel
@@ -108,15 +111,12 @@ def run_annealed_importance_sampling(
 
 
 def ais_ula_log_mean_weight(
-    p_0,
-    p_n,
-    n_steps : int,
-    n_particles : int,
-    ula_time_step,
-    return_variance=False
+    *args,
+    return_variance=False,
+    **kwargs
 ):
     transition_kernel = lambda distr: ULAKernel(distr, ula_time_step)
-    log_weights, samples = run_annealed_importance_sampling(p_0, p_n, n_steps, n_particles, transition_kernel)
+    log_weights, samples = run_annealed_importance_sampling(*args, **kwargs)
     log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(n_particles)
     if return_variance:
         weight_variance = torch.var(log_weights.exp(), axis=0)
