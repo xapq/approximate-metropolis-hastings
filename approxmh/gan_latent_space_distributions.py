@@ -1,8 +1,5 @@
 import torch
-
-# WARNING: make sure to install mimicry through "pip install git+https://github.com/kwotsin/mimicry.git"
 from torch_mimicry.nets import sngan
-
 from .utilities import CHECKPOINT_DIR
 from .distributions import Distribution, IndependentMultivariateNormal
 from pathlib import Path
