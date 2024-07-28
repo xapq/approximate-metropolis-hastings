@@ -59,7 +59,9 @@ def run_annealed_importance_sampling(
     n_steps : int,
     n_particles : int,
     transition_kernel,
-    n_kernel_steps=1
+    n_kernel_steps=1,
+    resample=True,
+    ess_threshold=0.5
 ):
     '''
     Use annealed importance sampling to generate a weighted sample from p_N using samples from p_0
@@ -96,17 +98,39 @@ def run_annealed_importance_sampling(
     # Particles
     X = p_0.sample((n_particles,))
     # Logarithmic weights
-    logW = -p_0.log_prob(X)
+    # logW = -p_0.log_prob(X)
+    logW = torch.zeros(*X.shape[:-1]).to(X.device)
+    
     for t in range(1, n_steps+ 1):
         # Markov kernel with stationary distribution gamma_t
         M_t = transition_kernel(gamma[t])
-        X_next = X
-        X_next = M_t.step(X_next)
-        # Incremental importance weights
-        # print('adding', logW.shape, X_next.shape, M_t.log_prob(X_next, X).shape)
-        logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next)
+        X_next = M_t.step(X)
+        # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant if particles were not resampled during that step)
+        logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next) + gamma[t].log_prob(X_next) - gamma[t-1].log_prob(X)
+        # Update particles
         X = X_next
-    logW += p_n.log_prob(X)
+        # Resampling
+        if resample:
+            normalized_weights = logW.exp()
+            weight_sum = normalized_weights.sum(dim=-1, keepdims=True)
+            normalized_weights /= weight_sum
+            effective_sample_size = 1. / (normalized_weights ** 2).sum(dim=0)
+            need_resampling = effective_sample_size < ess_threshold * n_particles  # batch indicies that require resampling
+            if torch.any(need_resampling):
+                sample_indicies = torch.multinomial(normalized_weights[:, need_resampling].T, n_particles)
+                # print('X[:, need_resampling]', X[:, need_resampling].shape)
+                # print('sample_indicies', sample_indicies.shape)
+                X[:, need_resampling] = X[sample_indicies.T, need_resampling]
+            # print(f'ESS: {effective_sample_size.item():0.0f}')
+            '''
+            if effective_sample_size < ess_threshold * n_particles:
+                print(f'Resampling')
+                sample_indicies = torch.multinomial(normalized_weights, n_particles, replacement=True)
+                X = X[sample_indicies]
+                logW = torch.ones_like(n_particles) * (weight_sum / n_particles).log()
+            '''
+    
+    # logW += p_n.log_prob(X)
     return logW, X
 
 
