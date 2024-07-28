@@ -30,7 +30,8 @@ def metropolis_hastings_with_noise(target, proposal, n_samples, burn_in=100, noi
     return acc_rate, samples[burn_in:].numpy(force=True)
 
 
-def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None, n_estimates=1, max_density_ratio=None, visualize=False):
+def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estimator, burn_in=None,
+                               n_estimates=1, max_density_ratio=None, visualize=False, return_acc_probs=False):
     '''
     Parameters
     ----------
@@ -51,12 +52,17 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     torch.tensor
         Samples from the Metropolis-Hastings algorithm
     '''
+    def open_tuple(x):
+        if isinstance(x, tuple):
+            return x[0]
+        return x
+    
     n_samples = proposal_samples.shape[0]
     if burn_in is None:
         burn_in = n_samples // 20
     
     target_log_prob = target.log_prob(proposal_samples)
-    proposal_log_probs = torch.stack([proposal_log_prob_estimator(proposal_samples) for _ in range(n_estimates)], dim=-1)
+    proposal_log_probs = torch.stack([open_tuple(proposal_log_prob_estimator(proposal_samples)) for _ in range(n_estimates)], dim=-1)
     density_ratios = target_log_prob.unsqueeze(-1) - proposal_log_probs
     
     if max_density_ratio is not None:
@@ -72,6 +78,7 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
     sample_indicies = torch.arange(n_samples)
     acc_noise = torch.rand(n_samples)
     density_ratios = density_ratios.to('cpu')
+    acc_probs = []
 
     for t in range(1, n_samples):
         index_last = sample_indicies[t - 1]
@@ -79,9 +86,10 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         last_density_ratio = density_ratios[index_last][(t - index_last) % n_estimates]
         accept_prob = torch.exp(
             cur_density_ratio - last_density_ratio
-        )
+        ).item()
         if acc_noise[t] > accept_prob:  # reject
             sample_indicies[t] = index_last
+        acc_probs.append(min(accept_prob, 1.))
     
     n_accepted = torch.ne(sample_indicies[burn_in:], sample_indicies[burn_in-1 : -1]).sum().item()
     acc_rate = n_accepted / (n_samples - burn_in)
@@ -103,7 +111,8 @@ def metropolis_hastings_filter(target, proposal_samples, proposal_log_prob_estim
         ax.legend()
 
     mh_indicies = sample_indicies[burn_in:]
-    return acc_rate, proposal_samples[mh_indicies]
+    return1 = acc_probs[burn_in:] if return_acc_probs else acc_rate
+    return return1, proposal_samples[mh_indicies]
 
 
 def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_prob_estimator, n_samples, burn_in=None):

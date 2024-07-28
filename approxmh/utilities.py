@@ -3,6 +3,12 @@ import jax
 from jax import numpy as jnp
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
+from pathlib import Path
+
+
+PROJECT_PATH = Path(__file__).parent.parent
+CHECKPOINT_DIR = Path(PROJECT_PATH, "gan_checkpoints")
+
 
 # torch.tensor to jax.numpy.ndarray
 ### TODO: make this work for jax on cuda

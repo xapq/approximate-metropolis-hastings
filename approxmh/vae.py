@@ -155,10 +155,10 @@ class VAE(torch.nn.Module):
         log_ml_estimate = ais_ula_log_mean_weight(
             self.encoder_distribution(x), 
             UnnormalizedPosterior(self, x),
-            n_steps,
-            n_particles,
-            ula_time_step,
-            return_variance
+            n_steps=n_steps,
+            n_particles=n_particles,
+            ula_time_step=ula_time_step,
+            return_variance=return_variance
         )
         return log_ml_estimate
 

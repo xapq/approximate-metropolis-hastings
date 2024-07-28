@@ -112,12 +112,13 @@ def run_annealed_importance_sampling(
 
 def ais_ula_log_mean_weight(
     *args,
+    ula_time_step=None,
     return_variance=False,
     **kwargs
 ):
     transition_kernel = lambda distr: ULAKernel(distr, ula_time_step)
-    log_weights, samples = run_annealed_importance_sampling(*args, **kwargs)
-    log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(n_particles)
+    log_weights, samples = run_annealed_importance_sampling(*args, transition_kernel=transition_kernel, **kwargs)
+    log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(kwargs["n_particles"])
     if return_variance:
         weight_variance = torch.var(log_weights.exp(), axis=0)
         return log_mean_weight, weight_variance
