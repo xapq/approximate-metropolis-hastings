@@ -97,6 +97,7 @@ def run_annealed_importance_sampling(
     gamma = [DensityMixture(p_0, 1 - beta[t], p_n, beta[t]) for t in range(n_steps + 1)]
     # Particles
     X = p_0.sample((n_particles,))
+    X.requires_grad_(False)
     # Logarithmic weights
     # logW = -p_0.log_prob(X)
     logW = torch.zeros(*X.shape[:-1]).to(X.device)
@@ -105,6 +106,7 @@ def run_annealed_importance_sampling(
         # Markov kernel with stationary distribution gamma_t
         M_t = transition_kernel(gamma[t])
         X_next = M_t.step(X)
+        X_next.requires_grad_(False)
         # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant if particles were not resampled during that step)
         logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next) + gamma[t].log_prob(X_next) - gamma[t-1].log_prob(X)
         # Update particles
@@ -117,6 +119,7 @@ def run_annealed_importance_sampling(
             effective_sample_size = 1. / (normalized_weights ** 2).sum(dim=0)
             need_resampling = effective_sample_size < ess_threshold * n_particles  # batch indicies that require resampling
             if torch.any(need_resampling):
+                # print('Resampling', need_resampling.sum().item())
                 sample_indicies = torch.multinomial(normalized_weights[:, need_resampling].T, n_particles)
                 # print('X[:, need_resampling]', X[:, need_resampling].shape)
                 # print('sample_indicies', sample_indicies.shape)
