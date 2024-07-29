@@ -1,5 +1,4 @@
 easydict==1.12
-ipython==8.0.1
 ipython==8.12.3
 jax==0.4.26
 matplotlib==3.8.3
