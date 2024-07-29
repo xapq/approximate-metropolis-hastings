@@ -61,7 +61,8 @@ def run_annealed_importance_sampling(
     transition_kernel,
     n_kernel_steps=1,
     resample=True,
-    ess_threshold=0.5
+    ess_threshold=0.5,
+    annealing_scheme='sigmoidal'
 ):
     '''
     Use annealed importance sampling to generate a weighted sample from p_N using samples from p_0
@@ -92,7 +93,14 @@ def run_annealed_importance_sampling(
         The expected value of each weight is the ratio of the normalizing constants of p_n and p_0
     '''
     # Annealing schedule
-    beta = torch.linspace(0, 1, n_steps + 1)
+    if annealing_scheme == 'linear':
+        beta = torch.linspace(0, 1, n_steps + 1)
+    elif annealing_scheme == 'sigmoidal':
+        sigmoid_scale = 4.
+        beta_tilda = torch.sigmoid(sigmoid_scale * torch.linspace(-1, 1, n_steps + 1))
+        beta = (beta_tilda - beta_tilda[0]) / (beta_tilda[n_steps] - beta_tilda[0])
+    else:
+        raise ValueError('annealing_scheme must be one of [linear, sigmoidal].')
     # Intermediate distributions
     gamma = [DensityMixture(p_0, 1 - beta[t], p_n, beta[t]) for t in range(n_steps + 1)]
     # Particles
@@ -102,7 +110,7 @@ def run_annealed_importance_sampling(
     # logW = -p_0.log_prob(X)
     logW = torch.zeros(*X.shape[:-1]).to(X.device)
     
-    for t in range(1, n_steps+ 1):
+    for t in range(1, n_steps + 1):
         # Markov kernel with stationary distribution gamma_t
         M_t = transition_kernel(gamma[t])
         X_next = M_t.step(X)

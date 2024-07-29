@@ -151,14 +151,11 @@ class VAE(torch.nn.Module):
             latent_std.diag() * self.std_factor ** 2
         )
     
-    def ais_ula_log_marginal_estimate(self, x, n_steps=10, n_particles=512, ula_time_step=None, return_variance=False):
+    def ais_ula_log_marginal_estimate(self, x, **kwargs):
         log_ml_estimate = ais_ula_log_mean_weight(
             self.encoder_distribution(x), 
             UnnormalizedPosterior(self, x),
-            n_steps=n_steps,
-            n_particles=n_particles,
-            ula_time_step=ula_time_step,
-            return_variance=return_variance
+            **kwargs
         )
         return log_ml_estimate
 
