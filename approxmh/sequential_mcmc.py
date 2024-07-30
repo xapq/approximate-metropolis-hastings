@@ -1,6 +1,7 @@
 import torch
 import math
 from abc import ABC, abstractmethod
+from .distributions import IndependentMultivariateNormal
 
 
 class DensityMixture:
@@ -30,23 +31,43 @@ class MarkovKernel(ABC):
         raise NotImplementedError
 
 
-class ULAKernel(MarkovKernel):
-    def __init__(self, stationary_distribution, time_step):
+class LangevinKernel(MarkovKernel):
+    # mh_corrected=False -> ULA, mh_corrected=True -> MALA
+    def __init__(self, stationary_distribution, time_step, mh_corrected: bool):
         super().__init__()
         self.negative_energy = stationary_distribution.log_prob
         self.time_step = time_step
+        self.mh_corrected = mh_corrected
 
-    def step(self, x):
-        minus_grad_U = self._grad_negative_energy(x)
-        noise = torch.randn_like(x)
-        y = x + self.time_step * minus_grad_U + math.sqrt(2 * self.time_step) * noise
+    def step(self, x, return_ar=True):
+        y = self.step_distribution(x).sample()
+        acc_prob = self.acceptance_probability(x, y)
+        if self.mh_corrected:
+            rejected = torch.rand_like(acc_prob) > acc_prob
+            y += (x - y) * rejected.unsqueeze(-1)
+        if return_ar:
+            return y, acc_prob.mean().item()
+            # print(acc_prob.mean().item())
         return y
 
     def log_prob(self, x, y):
-        minus_grad_U = self._grad_negative_energy(x)
-        standard_normal = torch.distributions.Normal(0., 1.)
-        return standard_normal.log_prob((y - x - self.time_step * minus_grad_U) / math.sqrt(2 * self.time_step)).sum(axis=-1)
-
+        if self.mh_corrected:
+            raise NotImplementedError('MALA transition probabilites are intractable')
+        return self.step_distribution(x).log_prob(y)
+        
+    def step_distribution(self, x):
+        return IndependentMultivariateNormal(
+            mean=x + self.time_step * self._grad_negative_energy(x),
+            std=torch.tensor(math.sqrt(2 * self.time_step))
+        )
+    
+    # Metropolis-Hastings acceptance probability
+    def acceptance_probability(self, x, y):
+        return torch.minimum(torch.exp(
+            self.negative_energy(y) + self.step_distribution(y).log_prob(x) -
+            self.negative_energy(x) - self.step_distribution(x).log_prob(y)
+        ), torch.tensor(1.))
+    
     def _grad_negative_energy(self, x):
         x = x.clone().detach().requires_grad_(True)
         sum_negative_energy = self.negative_energy(x).sum()
@@ -59,8 +80,9 @@ def run_annealed_importance_sampling(
     n_steps : int,
     n_particles : int,
     transition_kernel,
+    kernel_type=None,
     n_kernel_steps=1,
-    resample=True,
+    resample=False,
     ess_threshold=0.5,
     annealing_scheme='sigmoidal'
 ):
@@ -101,22 +123,31 @@ def run_annealed_importance_sampling(
         beta = (beta_tilda - beta_tilda[0]) / (beta_tilda[n_steps] - beta_tilda[0])
     else:
         raise ValueError('annealing_scheme must be one of [linear, sigmoidal].')
+    
     # Intermediate distributions
     gamma = [DensityMixture(p_0, 1 - beta[t], p_n, beta[t]) for t in range(n_steps + 1)]
     # Particles
-    X = p_0.sample((n_particles,))
-    X.requires_grad_(False)
+    X = p_0.sample((n_particles,)).requires_grad_(False)
     # Logarithmic weights
     # logW = -p_0.log_prob(X)
     logW = torch.zeros(*X.shape[:-1]).to(X.device)
+    acc_rates = []
     
     for t in range(1, n_steps + 1):
         # Markov kernel with stationary distribution gamma_t
         M_t = transition_kernel(gamma[t])
-        X_next = M_t.step(X)
+        X_next, acc_rate = M_t.step(X)
         X_next.requires_grad_(False)
-        # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant if particles were not resampled during that step)
-        logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next) + gamma[t].log_prob(X_next) - gamma[t-1].log_prob(X)
+        acc_rates.append(acc_rate)
+        
+        # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant when resample=False)
+        if kernel_type == 'almost_invertible':
+            logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next) + gamma[t].log_prob(X_next) - gamma[t-1].log_prob(X)
+        elif kernel_type == 'invariant':
+            logW += gamma[t].log_prob(X) - gamma[t-1].log_prob(X)
+        else:
+            raise ValueError('kernel_type must be one of [almost_invertible, invariant]')
+
         # Update particles
         X = X_next
         # Resampling
@@ -127,10 +158,7 @@ def run_annealed_importance_sampling(
             effective_sample_size = 1. / (normalized_weights ** 2).sum(dim=0)
             need_resampling = effective_sample_size < ess_threshold * n_particles  # batch indicies that require resampling
             if torch.any(need_resampling):
-                # print('Resampling', need_resampling.sum().item())
                 sample_indicies = torch.multinomial(normalized_weights[:, need_resampling].T, n_particles)
-                # print('X[:, need_resampling]', X[:, need_resampling].shape)
-                # print('sample_indicies', sample_indicies.shape)
                 X[:, need_resampling] = X[sample_indicies.T, need_resampling]
             # print(f'ESS: {effective_sample_size.item():0.0f}')
             '''
@@ -141,18 +169,22 @@ def run_annealed_importance_sampling(
                 logW = torch.ones_like(n_particles) * (weight_sum / n_particles).log()
             '''
     
-    # logW += p_n.log_prob(X)
+    # print(f'Langevin kernel average A/R: {torch.tensor(acc_rates).mean().item():0.3f}')
     return logW, X
 
 
-def ais_ula_log_mean_weight(
+def ais_langevin_log_norm_constant_ratio(
     *args,
-    ula_time_step=None,
+    mh_corrected=None,
+    time_step=None,
     return_variance=False,
     **kwargs
 ):
-    transition_kernel = lambda distr: ULAKernel(distr, ula_time_step)
-    log_weights, samples = run_annealed_importance_sampling(*args, transition_kernel=transition_kernel, **kwargs)
+    transition_kernel = lambda distr: LangevinKernel(distr, time_step, mh_corrected)
+    kernel_type = 'invariant' if mh_corrected else 'almost_invertible'
+    log_weights, samples = run_annealed_importance_sampling(
+        *args, transition_kernel=transition_kernel, kernel_type=kernel_type, **kwargs
+    )
     log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(kwargs["n_particles"])
     if return_variance:
         weight_variance = torch.var(log_weights.exp(), axis=0)

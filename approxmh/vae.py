@@ -14,7 +14,7 @@ from .distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
 from .distributions import IndependentMultivariateNormal
 from .utilities import dataloader_from_tensor
 from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
-from .sequential_mcmc import ais_ula_log_mean_weight, DensityMixture
+from .sequential_mcmc import ais_langevin_log_norm_constant_ratio, DensityMixture
 
 
 def SequentialFC(dims, activation):
@@ -151,10 +151,17 @@ class VAE(torch.nn.Module):
             latent_std.diag() * self.std_factor ** 2
         )
     
-    def ais_ula_log_marginal_estimate(self, x, **kwargs):
-        log_ml_estimate = ais_ula_log_mean_weight(
+    def ais_log_marginal_estimate(self, x, kernel_type='ula', **kwargs):
+        if kernel_type == 'ula':
+            mh_corrected=False
+        elif kernel_type == 'mala':
+            mh_corrected=True
+        else:
+            raise NotImplementedError("kernel_type must be one of ['ula', 'mala']")
+        return ais_langevin_log_norm_constant_ratio(
             self.encoder_distribution(x), 
             UnnormalizedPosterior(self, x),
+            mh_corrected=False,
             **kwargs
         )
         return log_ml_estimate
