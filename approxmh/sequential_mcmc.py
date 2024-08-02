@@ -1,5 +1,5 @@
 import torch
-import math
+import math, statistics
 from abc import ABC, abstractmethod
 from .distributions import IndependentMultivariateNormal
 
@@ -39,14 +39,14 @@ class LangevinKernel(MarkovKernel):
         self.time_step = time_step
         self.mh_corrected = mh_corrected
 
-    def step(self, x, return_ar=True):
+    def step(self, x, return_acc_prob=True):
         y = self.step_distribution(x).sample()
         acc_prob = self.acceptance_probability(x, y)
         if self.mh_corrected:
             rejected = torch.rand_like(acc_prob) > acc_prob
             y += (x - y) * rejected.unsqueeze(-1)
-        if return_ar:
-            return y, acc_prob.mean().item()
+        if return_acc_prob:
+            return y, acc_prob.detach()
             # print(acc_prob.mean().item())
         return y
 
@@ -58,7 +58,7 @@ class LangevinKernel(MarkovKernel):
     def step_distribution(self, x):
         return IndependentMultivariateNormal(
             mean=x + self.time_step * self._grad_negative_energy(x),
-            std=torch.tensor(math.sqrt(2 * self.time_step))
+            std=torch.tensor(2 * self.time_step, device=x.device).sqrt(),
         )
     
     # Metropolis-Hastings acceptance probability
@@ -84,7 +84,8 @@ def run_annealed_importance_sampling(
     n_kernel_steps=1,
     resample=False,
     ess_threshold=0.5,
-    annealing_scheme='sigmoidal'
+    annealing_scheme='sigmoidal',
+    return_acc_rate=False
 ):
     '''
     Use annealed importance sampling to generate a weighted sample from p_N using samples from p_0
@@ -136,9 +137,9 @@ def run_annealed_importance_sampling(
     for t in range(1, n_steps + 1):
         # Markov kernel with stationary distribution gamma_t
         M_t = transition_kernel(gamma[t])
-        X_next, acc_rate = M_t.step(X)
+        X_next, acc_rate = M_t.step(X, return_acc_prob=True)
         X_next.requires_grad_(False)
-        acc_rates.append(acc_rate)
+        acc_rates.append(acc_rate.mean(dim=0).detach())
         
         # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant when resample=False)
         if kernel_type == 'almost_invertible':
@@ -170,23 +171,42 @@ def run_annealed_importance_sampling(
             '''
     
     # print(f'Langevin kernel average A/R: {torch.tensor(acc_rates).mean().item():0.3f}')
+    if return_acc_rate:
+        acc_rate = torch.stack(acc_rates).mean(dim=0)
+        return logW, X, acc_rate
     return logW, X
 
 
 def ais_langevin_log_norm_constant_ratio(
     *args,
+    n_particles=None,
+    batch_particles=None,
     mh_corrected=None,
     time_step=None,
-    return_variance=False,
+    return_acc_rate=True,
     **kwargs
 ):
+    if batch_particles is None:
+        batch_particles = n_particles
+    
     transition_kernel = lambda distr: LangevinKernel(distr, time_step, mh_corrected)
     kernel_type = 'invariant' if mh_corrected else 'almost_invertible'
-    log_weights, samples = run_annealed_importance_sampling(
-        *args, transition_kernel=transition_kernel, kernel_type=kernel_type, **kwargs
-    )
-    log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(kwargs["n_particles"])
-    if return_variance:
-        weight_variance = torch.var(log_weights.exp(), axis=0)
-        return log_mean_weight, weight_variance
-    return log_mean_weight
+
+    log_weights = []
+    acc_rate = []
+    for i in range(0, n_particles, batch_particles):
+        batch_log_weights, _, batch_acc_rate = run_annealed_importance_sampling(
+            *args, transition_kernel=transition_kernel, kernel_type=kernel_type, 
+            n_particles=min(batch_particles, n_particles - i), return_acc_rate=True, **kwargs
+        )
+        log_weights.append(batch_log_weights.detach())
+        acc_rate.append(batch_acc_rate)
+
+    log_weights = torch.cat(log_weights)
+    acc_rate = torch.stack(acc_rate).mean(dim=0)
+    
+    log_mean_weight = torch.logsumexp(log_weights, axis=0) - math.log(n_particles)
+    weight_variance = torch.var(log_weights.exp(), axis=0)
+    if return_acc_rate:
+        return log_mean_weight, weight_variance, acc_rate
+    return log_mean_weight, weight_variance

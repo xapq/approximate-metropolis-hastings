@@ -93,6 +93,10 @@ class VAE(torch.nn.Module):
         std_x = torch.exp(0.5 * log_var_x)
         return IndependentMultivariateNormal(mean_x, std_x)
 
+    # proportional to p(z|x)
+    def unnormalized_posterior(self, x):
+        return UnnormalizedPosterior(self, x)
+
     # parameters of the distribution q(z|x)
     def encoding_parameters(self, x):
         mean_z, log_var_z = self.encoder(x).chunk(2, dim=-1)
@@ -125,9 +129,6 @@ class VAE(torch.nn.Module):
     def sample(self, sample_shape=(1,)):
         z = self.sample_latent(sample_shape)
         return self.decode(z)
-
-    def sample_prior(self, sample_shape=(1,)):
-        return self.prior.sample(sample_shape)
 
     def sample_latent(self, sample_shape=(1,)):
         return self.latent_sampling_distribution.sample(sample_shape)
