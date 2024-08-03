@@ -11,7 +11,7 @@ from IPython.display import clear_output
 
 from .y_utils import *
 from .distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
-from .distributions import IndependentMultivariateNormal
+from .distributions import Distribution, IndependentMultivariateNormal
 from .utilities import dataloader_from_tensor
 from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 from .sequential_mcmc import ais_langevin_log_norm_constant_ratio, DensityMixture
@@ -26,8 +26,9 @@ def SequentialFC(dims, activation):
         network.append(nn.Linear(dims[i], dims[i + 1]))
     return network        
 
-class UnnormalizedPosterior:
+class UnnormalizedPosterior(Distribution):
     def __init__(self, model, x):
+        super().__init__()
         self.model = model
         self.x = x
 
@@ -75,7 +76,7 @@ class VAE(torch.nn.Module):
     def reconstruct(self, x):
         return self.decode(self.encode(x))
 
-    # p(z|x)
+    # proportional to p(z|x)
     def posterior(self, x):
         return UnnormalizedPosterior(self, x)
 
@@ -92,10 +93,6 @@ class VAE(torch.nn.Module):
         mean_x, log_var_x = self.decoding_parameters(z)
         std_x = torch.exp(0.5 * log_var_x)
         return IndependentMultivariateNormal(mean_x, std_x)
-
-    # proportional to p(z|x)
-    def unnormalized_posterior(self, x):
-        return UnnormalizedPosterior(self, x)
 
     # parameters of the distribution q(z|x)
     def encoding_parameters(self, x):
@@ -152,31 +149,35 @@ class VAE(torch.nn.Module):
             latent_std.diag() * self.std_factor ** 2
         )
     
-    def ais_log_marginal_estimate(self, x, kernel_type='ula', **kwargs):
+    def ais_log_marginal_estimate(self, x, kernel_type='ula', precondition=False, **kwargs):
         if kernel_type == 'ula':
             mh_corrected=False
         elif kernel_type == 'mala':
             mh_corrected=True
         else:
             raise NotImplementedError("kernel_type must be one of ['ula', 'mala']")
+
+        if precondition:  # scale step-size according to encoder variance for each sample individually
+            _, log_encoder_variance = self.encoding_parameters(x)
+            kwargs['time_step'] *= torch.exp(log_encoder_variance)
+        
         return ais_langevin_log_norm_constant_ratio(
             self.encoder_distribution(x), 
             UnnormalizedPosterior(self, x),
-            mh_corrected=False,
+            mh_corrected=mh_corrected,
             **kwargs
         )
-        return log_ml_estimate
 
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
-    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64, return_variance=False):
+    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64, return_variance=True):
         point_estimates = []
         for i in range(0, L, batch_L):
             point_estimates.append(self._iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
         point_estimates = torch.cat(point_estimates)
         estimate = (torch.logsumexp(point_estimates.double() / beta, dim=0) - np.log(L)) * beta
         if return_variance:
-            var = torch.var(point_estimates, dim=0)
+            var = torch.var(point_estimates.exp(), dim=0)
             return estimate, var
         return estimate
     

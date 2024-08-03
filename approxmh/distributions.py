@@ -162,8 +162,9 @@ def get_mode_coverage(gaussian_mixture, x, k=2):
     return counts
 
 
-class IndependentMultivariateNormal:
+class IndependentMultivariateNormal(Distribution):
     def __init__(self, mean, std, **kwargs):
+        super().__init__()
         self.mean = mean  # (*batch_dims, data_dim)
         self.std = std
         self.batch_dims = self.mean.shape[:-1]

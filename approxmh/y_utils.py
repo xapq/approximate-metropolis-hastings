@@ -60,6 +60,16 @@ def to_numpy(x):
 def pl(x):
     return x.T.detach().cpu().numpy()
 
+def unify_clim(*args):
+    vmin = float('inf')
+    vmax = float('-inf')
+    for arg in args:
+        vmin_i, vmax_i = arg.get_clim()
+        vmin = min(vmin, vmin_i)
+        vmax = max(vmax, vmax_i)
+    for arg in args:
+        arg.set_clim(vmin, vmax)
+
 
 def log_sum_exp(x):
     x_max = torch.max(x)

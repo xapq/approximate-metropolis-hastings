@@ -58,7 +58,7 @@ class LangevinKernel(MarkovKernel):
     def step_distribution(self, x):
         return IndependentMultivariateNormal(
             mean=x + self.time_step * self._grad_negative_energy(x),
-            std=torch.tensor(2 * self.time_step, device=x.device).sqrt(),
+            std=torch.as_tensor(2 * self.time_step, device=x.device).sqrt(),
         )
     
     # Metropolis-Hastings acceptance probability
@@ -74,6 +74,22 @@ class LangevinKernel(MarkovKernel):
         return torch.autograd.grad(sum_negative_energy, x)[0]
 
 
+def create_annealing_schedule(n_steps, scheme, scale=1.):
+    if scheme == 'linear':
+        return torch.linspace(0, 1, n_steps + 1)
+    if scheme == 'sigmoidal':
+        beta_tilda = torch.sigmoid(scale * torch.linspace(-1, 1, n_steps + 1))
+    elif scheme == 'logit':
+        beta_tilda = torch.logit(scale * torch.linspace(-1, 1, n_steps + 1))
+    elif scheme == 'sine':
+        beta_tilda = torch.sin(scale * 0.5 * math.pi * torch.linspace(0, 1, n_steps + 1))
+    else:
+        raise ValueError('Annealing scheme must be one of [linear, sigmoidal, logit, sine].')
+        
+    beta = (beta_tilda - beta_tilda[0]) / (beta_tilda[n_steps] - beta_tilda[0])
+    return beta
+
+
 def run_annealed_importance_sampling(
     p_0,
     p_n,
@@ -84,7 +100,8 @@ def run_annealed_importance_sampling(
     n_kernel_steps=1,
     resample=False,
     ess_threshold=0.5,
-    annealing_scheme='sigmoidal',
+    annealing_scheme='linear',
+    annealing_scale=1.,
     return_acc_rate=False
 ):
     '''
@@ -116,15 +133,9 @@ def run_annealed_importance_sampling(
         The expected value of each weight is the ratio of the normalizing constants of p_n and p_0
     '''
     # Annealing schedule
-    if annealing_scheme == 'linear':
-        beta = torch.linspace(0, 1, n_steps + 1)
-    elif annealing_scheme == 'sigmoidal':
-        sigmoid_scale = 4.
-        beta_tilda = torch.sigmoid(sigmoid_scale * torch.linspace(-1, 1, n_steps + 1))
-        beta = (beta_tilda - beta_tilda[0]) / (beta_tilda[n_steps] - beta_tilda[0])
-    else:
-        raise ValueError('annealing_scheme must be one of [linear, sigmoidal].')
-    
+    beta = create_annealing_schedule(n_steps, annealing_scheme, annealing_scale)
+    if n_kernel_steps > 1:
+        beta = torch.cat([torch.tensor([0.]), torch.repeat_interleave(beta[1:], repeats=n_kernel_steps)])
     # Intermediate distributions
     gamma = [DensityMixture(p_0, 1 - beta[t], p_n, beta[t]) for t in range(n_steps + 1)]
     # Particles
@@ -142,7 +153,7 @@ def run_annealed_importance_sampling(
         acc_rates.append(acc_rate.mean(dim=0).detach())
         
         # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant when resample=False)
-        if kernel_type == 'almost_invertible':
+        if kernel_type == 'almost_invertible': 
             logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next) + gamma[t].log_prob(X_next) - gamma[t-1].log_prob(X)
         elif kernel_type == 'invariant':
             logW += gamma[t].log_prob(X) - gamma[t-1].log_prob(X)
