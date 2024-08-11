@@ -195,104 +195,35 @@ class IndependentMultivariateNormal(Distribution):
             return self.rsample(sample_shape)
 
 
-class GaussianMixture(Distribution):
-    """
-    Mixture of n gaussians (multivariate)
-    """
-
+class DoubleWell(Distribution):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.locs = kwargs.get(
-            "locs",
-            torch.FloatTensor([[-1, 0], [1, 0]]),
-        )  # list of locations for each of these gaussians
-        self.num = kwargs.get("num_gauss", len(self.locs))
-        self.pis = kwargs.get(
-            "p_gaussians",
-            torch.FloatTensor([1.0 / self.num] * self.num),
-        )
-        self.dim = kwargs.get("dim", self.locs.shape[1])
-        self.sigma = kwargs.get("sigma", 0.2)
-        self.covs = kwargs.get(
-            "covs",
-            [self.sigma**2 * torch.eye(self.dim)] * self.num,
-        )  # list of covariance matrices for each of these gaussians
+        self.device = kwargs.get("device", "cpu")
+        self.a = kwargs.get("a", 1.0)
+        self.b = kwargs.get("b", 1.0)
+        self.c = kwargs.get("b", 1.0)
+        self.d = kwargs.get("b", 1.0)
 
-        self.peak = [None] * self.num
-        for i in range(self.num):
-            self.peak[i] = torch.distributions.MultivariateNormal(
-                loc=self.locs[i],
-                covariance_matrix=self.covs[i],
-            )
+    def log_prob(self, xy):
+        x = xy[..., 0]
+        y = xy[..., 1]
+        return -self.a * x**4 / 4 + self.b * x**2 / 2 - self.c * x - self.d * y**2 / 2
 
-    def get_density(self, x):
-        """
-        The method returns target density
-        Input:
-        x - datapoint
-        z - latent vaiable
-        Output:
-        density - p(x)
-        """
-        density = self.log_prob(x).exp()
-        return density
 
-    def log_prob(self, z):
-        """
-        The method returns target logdensity
-        Input:
-        x - datapoint
-        z - latent variable
-        Output:
-        log_density - log p(x)
-        """
-        log_p = torch.tensor([], device=self.device)
-        # pdb.set_trace()
-        for i in range(self.num):
-            log_paux = (
-                torch.log(self.pis[i]) + self.peak[i].log_prob(z.to(self.device))
-            ).view(-1, 1)
-            log_p = torch.cat([log_p, log_paux], dim=-1)
-        log_density = torch.logsumexp(log_p, dim=1)
-        return log_density.view(z.shape[:-1])
+class Serpentine(Distribution):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.device = kwargs.get("device", "cpu")
+        self.n_sections = kwargs.get("n_sections", 1)
+        self.section_width = kwargs.get("section_width", 1.)
+        self.fence_length = kwargs.get("fence_length", 0.8)
+        self.height = 1.
+        self.width = self.n_sections * self.section_width
 
-    def energy(self, z, x=None):
-        return -self.log_prob(z, x)
-
-    def plot_2d(self):
-        if self.dim != 2:
-            raise NotImplementedError("can't plot for gaussians not in 2d")
-
-        fig, ax = plt.subplots()
-
-        dim1 = 0
-        dim2 = 1
-
-        xlim = [
-            self.locs[:, dim1].min().item() - 1,
-            self.locs[:, dim1].max().item() + 1,
-        ]
-        ylim = [
-            self.locs[:, dim2].min().item() - 1,
-            self.locs[:, dim2].max().item() + 1,
-        ]
-
-        x = np.linspace(*xlim, 100)
-        y = np.linspace(*ylim, 100)
-        xx, yy = np.meshgrid(x, y)
-        z = torch.FloatTensor(np.stack([xx, yy], -1))
-        vals = self.log_prob(z).exp()
-
-        plt.contourf(
-            vals,
-            extent=[*xlim, *ylim],
-            cmap="Greens",
-            alpha=0.5,
-            aspect="auto",
-        )
-
-        return fig, xlim, ylim
-
+    def log_prob(self, x):
+        res = torch.zeros(x.shape[:-1], device=self.device)
+        res[(x[..., 0] < 0.) ^ (x[..., 0] > self.width) ^ (x[..., 1] < 0.) ^ (x[..., 1] > self.height)] = -100.
+        return res
 
 class Funnel(Distribution):
     def __init__(self, **kwargs):
