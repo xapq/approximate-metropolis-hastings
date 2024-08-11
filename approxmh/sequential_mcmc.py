@@ -102,7 +102,8 @@ def run_annealed_importance_sampling(
     ess_threshold=0.5,
     annealing_scheme='linear',
     annealing_scale=1.,
-    return_acc_rate=False
+    return_acc_rate=False,
+    return_all_steps=False
 ):
     '''
     Use annealed importance sampling to generate a weighted sample from p_N using samples from p_0
@@ -136,14 +137,19 @@ def run_annealed_importance_sampling(
     beta = create_annealing_schedule(n_steps, annealing_scheme, annealing_scale)
     if n_kernel_steps > 1:
         beta = torch.cat([torch.tensor([0.]), torch.repeat_interleave(beta[1:], repeats=n_kernel_steps)])
+        n_steps *= n_kernel_steps
     # Intermediate distributions
     gamma = [DensityMixture(p_0, 1 - beta[t], p_n, beta[t]) for t in range(n_steps + 1)]
     # Particles
     X = p_0.sample((n_particles,)).requires_grad_(False)
     # Logarithmic weights
-    # logW = -p_0.log_prob(X)
     logW = torch.zeros(*X.shape[:-1]).to(X.device)
+    # Acceptance Rates
     acc_rates = []
+    # Full particle history
+    if return_all_steps:
+        all_X = [X.clone().detach()]
+        all_logW = [logW.clone().detach()]
     
     for t in range(1, n_steps + 1):
         # Markov kernel with stationary distribution gamma_t
@@ -172,18 +178,20 @@ def run_annealed_importance_sampling(
             if torch.any(need_resampling):
                 sample_indicies = torch.multinomial(normalized_weights[:, need_resampling].T, n_particles)
                 X[:, need_resampling] = X[sample_indicies.T, need_resampling]
-            # print(f'ESS: {effective_sample_size.item():0.0f}')
-            '''
-            if effective_sample_size < ess_threshold * n_particles:
-                print(f'Resampling')
-                sample_indicies = torch.multinomial(normalized_weights, n_particles, replacement=True)
-                X = X[sample_indicies]
-                logW = torch.ones_like(n_particles) * (weight_sum / n_particles).log()
-            '''
+                logW[:, need_resampling] = weight_sum / n_particles
+        # Logging
+        if return_all_steps:
+            all_X.append(X.clone().detach())
+            all_logW.append(logW.clone().detach())
     
-    # print(f'Langevin kernel average A/R: {torch.tensor(acc_rates).mean().item():0.3f}')
+    acc_rate = torch.stack(acc_rates, dim=-1)
+    if return_all_steps:
+        X = torch.stack(all_X, dim=-1)
+        logW = torch.stack(all_logW, dim=-1)
+    else:
+        acc_rate = acc_rates.mean(dim=-1)
+
     if return_acc_rate:
-        acc_rate = torch.stack(acc_rates).mean(dim=0)
         return logW, X, acc_rate
     return logW, X
 
