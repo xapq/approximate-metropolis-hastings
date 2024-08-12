@@ -2,8 +2,10 @@ import numpy as np
 from scipy.stats import bernoulli
 import torch
 import numbers
+import statistics
 import matplotlib.pyplot as plt
 
+from .sequential_mcmc import LangevinKernel
 from .y_utils import *
 
 
@@ -139,10 +141,49 @@ def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_
     return acc_rate, samples_indicies[burn_in:]
 
 
+class LocalGlobalSampler:
+    def __init__(self, **kwargs):
+        self.target = kwargs.get("target")
+        self.D = kwargs.get("D")  # dimension of the target
+        self.global_model = kwargs.get("global_model")
+        self.model_log_likelihood_estimate = kwargs.get("model_log_likelihood_estimate")
+        self.n_local_steps = kwargs.get("n_local_steps")
+        self.n_isir_particles = kwargs.get("n_isir_particles", 10)
+        self.local_step_size = kwargs.get("local_step_size")
+        self.device = kwargs.get("device", "cpu")
+        
+        self.local_kernel = LangevinKernel(self.target, self.local_step_size, mh_corrected=True)
+        self.local_steps_left = 0 # number of local steps to do before the next global step
+        self.current_state = kwargs.get("starting_state", torch.zeros(self.D, device=self.device))
+
+    def sample(self, n_samples):
+        samples = []
+        local_acc_probs = []
+        for t in range(n_samples):
+            if self.local_steps_left > 0:
+                self.current_state, acc_prob = self.local_kernel.step(self.current_state, return_acc_prob=True)
+                local_acc_probs.append(acc_prob)
+                self.local_steps_left -= 1
+            else:
+                self.make_global_step()
+                self.local_steps_left = self.n_local_steps
+            samples.append(self.current_state)
+        local_acc_rate = torch.mean(torch.stack(local_acc_probs), dim=0)
+        return torch.stack(samples), local_acc_rate
+
+    def make_global_step(self):
+        particles = torch.zeros((self.n_isir_particles, self.D), device=self.device)
+        particles[0] = self.current_state
+        particles[1:] = self.global_model.sample((self.n_isir_particles - 1,))
+        weights = torch.exp(self.target.log_prob(particles) - self.model_log_likelihood_estimate(particles))
+        self.current_state = particles[torch.multinomial(weights, num_samples=1)[0]]
+
+
 def get_log_prob_quantile(target, q=0, N=2000):
     samples = target.sample((N, ))
     log_probs = target.log_prob(samples)
     return log_probs.quantile(q).item()
+
 
 def log_prob_cutoff_filter(target, samples, cutoff_min, cutoff_max=torch.inf, return_indicies=True):
     sample_log_prob = target.log_prob(samples)

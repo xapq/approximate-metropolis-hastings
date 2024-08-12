@@ -9,6 +9,7 @@ from easydict import EasyDict as edict
 from matplotlib import pyplot as plt
 from torch import nn
 import math
+from torch.nn import ReLU
 
 # from .linear_regression import RegressionDataset
 # from .logistic_regression import ClassificationDataset
@@ -140,6 +141,24 @@ def create_random_gaussian_mixture(dim, n_components, mean_lim=(0, 1), variance_
     cov_matricies = principal_components @ component_variances @ principal_components.transpose(-2, -1)
     return create_gaussian_mixture(means.to(device), cov_matricies.to(device))
 
+def create_serpentine(n_sections=1, section_width=1., section_height=5., device='cpu'):
+    thickness = 0.1
+    length = 0.3
+    n_components = 2 * n_sections - 1
+    means = torch.zeros((n_components, 2), device=device)
+    stds = torch.ones((n_components, 2), device=device) * thickness
+    for i in range(n_sections):
+        means[2 * i][0] = i * section_width
+        stds[2 * i][1] = length * section_height
+        if i + 1 < n_sections:
+            means[2 * i + 1][0] = (i + 0.5) * section_width
+            means[2 * i + 1][1] = 0.5 * (-1)**(i%2) * section_height
+            stds[2 * i + 1][0] = length * section_width
+    cov_matricies = torch.diag_embed(stds ** 2)
+    return create_gaussian_mixture(means, cov_matricies)
+        
+
+
 # returns (n_mixture_components, n_samples)-shaped tensor
 def scaled_mahalanobis_distance(gaussian_mixture, x):
     batched_normal = gaussian_mixture.component_distribution
@@ -217,13 +236,24 @@ class Serpentine(Distribution):
         self.n_sections = kwargs.get("n_sections", 1)
         self.section_width = kwargs.get("section_width", 1.)
         self.fence_length = kwargs.get("fence_length", 0.8)
+        self.fence_power = kwargs.get("fence_power", 1.)
         self.height = 1.
         self.width = self.n_sections * self.section_width
 
-    def log_prob(self, x):
-        res = torch.zeros(x.shape[:-1], device=self.device)
-        res[(x[..., 0] < 0.) ^ (x[..., 0] > self.width) ^ (x[..., 1] < 0.) ^ (x[..., 1] > self.height)] = -100.
+    def log_prob(self, xy):
+        x = xy[..., 0]
+        y = xy[..., 1]
+        res = torch.zeros(xy.shape[:-1], device=self.device)
+        res[(x < 0.) | (x > self.width) | (y < 0.) | (y > self.height)] = -1.
+        for i in range(1, self.n_sections):
+            h_dist = torch.abs(x - i * self.section_width)
+            if i % 2 == 0:
+                v_dist = ReLU()(y - self.fence_length)
+            else:
+                v_dist = ReLU()(1 - self.fence_length - y)
+            res = torch.logsumexp(res, 0.5 * self.fence_power * torch.hypot(h_dist, v_dist))
         return res
+
 
 class Funnel(Distribution):
     def __init__(self, **kwargs):

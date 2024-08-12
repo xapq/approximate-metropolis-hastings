@@ -52,7 +52,7 @@ class LangevinKernel(MarkovKernel):
 
     def log_prob(self, x, y):
         if self.mh_corrected:
-            raise NotImplementedError('MALA transition probabilites are intractable')
+            raise NotImplementedError('MALA kerneles do not have a transition density')
         return self.step_distribution(x).log_prob(y)
         
     def step_distribution(self, x):
@@ -189,7 +189,7 @@ def run_annealed_importance_sampling(
         X = torch.stack(all_X, dim=-1)
         logW = torch.stack(all_logW, dim=-1)
     else:
-        acc_rate = acc_rates.mean(dim=-1)
+        acc_rate = acc_rate.mean(dim=-1)
 
     if return_acc_rate:
         return logW, X, acc_rate
