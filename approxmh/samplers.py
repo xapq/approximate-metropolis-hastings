@@ -144,7 +144,6 @@ def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_
 class LocalGlobalSampler:
     def __init__(self, **kwargs):
         self.target = kwargs.get("target")
-        self.D = kwargs.get("D")  # dimension of the target
         self.global_model = kwargs.get("global_model")
         self.model_log_likelihood_estimate = kwargs.get("model_log_likelihood_estimate")
         self.n_local_steps = kwargs.get("n_local_steps")
@@ -154,7 +153,7 @@ class LocalGlobalSampler:
         
         self.local_kernel = LangevinKernel(self.target, self.local_step_size, mh_corrected=True)
         self.local_steps_left = 0 # number of local steps to do before the next global step
-        self.current_state = kwargs.get("starting_state", torch.zeros(self.D, device=self.device))
+        self.current_state = kwargs.get("starting_state", torch.zeros(self.target.dim, device=self.device))
 
     def sample(self, n_samples):
         samples = []
@@ -172,7 +171,7 @@ class LocalGlobalSampler:
         return torch.stack(samples), local_acc_rate
 
     def make_global_step(self):
-        particles = torch.zeros((self.n_isir_particles, self.D), device=self.device)
+        particles = torch.zeros((self.n_isir_particles, self.target.dim), device=self.device)
         particles[0] = self.current_state
         particles[1:] = self.global_model.sample((self.n_isir_particles - 1,))
         weights = torch.exp(self.target.log_prob(particles) - self.model_log_likelihood_estimate(particles))

@@ -202,7 +202,7 @@ def ais_langevin_log_norm_constant_ratio(
     batch_particles=None,
     mh_corrected=None,
     time_step=None,
-    return_acc_rate=True,
+    return_acc_rate=False,
     **kwargs
 ):
     if batch_particles is None:

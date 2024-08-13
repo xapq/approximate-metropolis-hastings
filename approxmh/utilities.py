@@ -4,9 +4,12 @@ from jax import numpy as jnp
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from pathlib import Path
+import matplotlib.pyplot as plt
+from .y_utils import *
 
 
 PROJECT_PATH = Path(__file__).parent.parent
+MODEL_DIR = Path(PROJECT_PATH, "models")
 CHECKPOINT_DIR = Path(PROJECT_PATH, "gan_checkpoints")
 
 
@@ -60,3 +63,33 @@ def plot_2d_torch_function(ax, func, xlim, ylim, dpi, device='cpu', **kwargs):
     values = evaluate_on_grid(func, xlim, ylim, dpi, device=device)
     img = ax.imshow(values.detach().cpu(), origin='lower', extent=[*xlim, *ylim], aspect='auto', **kwargs)
     return img
+
+
+def visualize_distribution(distribution, xlim=None, ylim=None, levels=30, dpi=30, proj_dims=(0, 1), plot_samples=True, sample_size=4000):
+    fixed_coordinates = torch.zeros(distribution.dim)
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    if plot_samples:
+        # Implementation of torch.distributions.mixture_same_family.sample() causes MemoryOverflow without batched sampling
+        sample = sample_by_batches(distribution, sample_size, batch_size=1024)[:, proj_dims]
+        ax.scatter(*pl(sample), zorder=4, alpha=0.5, s=150, edgecolors='none', marker='.')
+        if xlim is None:
+            xlim = (sample[:, 0].min().item(), sample[:, 0].max().item())
+        if ylim is None:
+            ylim = (sample[:, 1].min().item(), sample[:, 1].max().item())
+
+    x = torch.linspace(*xlim, dpi)
+    y = torch.linspace(*ylim, dpi)
+    X, Y = torch.meshgrid(x, y, indexing='ij')
+    points = fixed_coordinates.repeat(dpi * dpi, 1)
+    points[:, proj_dims[0]] = X.ravel()
+    points[:, proj_dims[1]] = Y.ravel()
+    Z = distribution.log_prob(points.to(distribution.device)).reshape(dpi, dpi)
+    
+    ax.contour(to_numpy(X), to_numpy(Y), to_numpy(Z), levels=levels)
+    # ax.imshow(to_numpy(Z), origin='lower', extent=[*xlim, *ylim], aspect='auto')
+    ax.set_xlim(*xlim)
+    ax.set_ylim(*ylim)
+    ax.set_xlabel(f'x_{proj_dims[0]}')
+    ax.set_ylabel(f'x_{proj_dims[1]}')
+    ax.set_title(f'{distribution.friendly_name} {" (Projection)" if distribution.dim > 2 else ""}')
