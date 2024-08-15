@@ -69,9 +69,19 @@ class LangevinKernel(MarkovKernel):
         ), torch.tensor(1.))
     
     def _grad_negative_energy(self, x):
-        x = x.clone().detach().requires_grad_(True)
+        x = x.detach().requires_grad_(True)
         sum_negative_energy = self.negative_energy(x).sum()
         return torch.autograd.grad(sum_negative_energy, x)[0]
+
+
+# helper classes
+class ULAKernel(LangevinKernel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, mh_corrected=False, **kwargs)
+
+class MALAKernel(LangevinKernel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, mh_corrected=True, **kwargs)
 
 
 def create_annealing_schedule(n_steps, scheme, scale=1.):
@@ -96,14 +106,15 @@ def run_annealed_importance_sampling(
     n_steps : int,
     n_particles : int,
     transition_kernel,
-    kernel_type=None,
+    kernel_property=None,
     n_kernel_steps=1,
     resample=False,
     ess_threshold=0.5,
     annealing_scheme='linear',
     annealing_scale=1.,
     return_acc_rate=False,
-    return_all_steps=False
+    return_all_steps=False,
+    **kwargs
 ):
     '''
     Use annealed importance sampling to generate a weighted sample from p_N using samples from p_0
@@ -159,12 +170,12 @@ def run_annealed_importance_sampling(
         acc_rates.append(acc_rate.mean(dim=0).detach())
         
         # Incremental importance weights (adding and then subtracting gamma_t(X_t) is redundant when resample=False)
-        if kernel_type == 'almost_invertible': 
+        if kernel_property == 'almost_invertible': 
             logW += M_t.log_prob(X_next, X) - M_t.log_prob(X, X_next) + gamma[t].log_prob(X_next) - gamma[t-1].log_prob(X)
-        elif kernel_type == 'invariant':
+        elif kernel_property == 'invariant':
             logW += gamma[t].log_prob(X) - gamma[t-1].log_prob(X)
         else:
-            raise ValueError('kernel_type must be one of [almost_invertible, invariant]')
+            raise ValueError('kernel_property must be one of [almost_invertible, invariant]')
 
         # Update particles
         X = X_next
@@ -209,13 +220,13 @@ def ais_langevin_log_norm_constant_ratio(
         batch_particles = n_particles
     
     transition_kernel = lambda distr: LangevinKernel(distr, time_step, mh_corrected)
-    kernel_type = 'invariant' if mh_corrected else 'almost_invertible'
+    kernel_property = 'invariant' if mh_corrected else 'almost_invertible'
 
     log_weights = []
     acc_rate = []
     for i in range(0, n_particles, batch_particles):
         batch_log_weights, _, batch_acc_rate = run_annealed_importance_sampling(
-            *args, transition_kernel=transition_kernel, kernel_type=kernel_type, 
+            *args, transition_kernel=transition_kernel, kernel_property=kernel_property, 
             n_particles=min(batch_particles, n_particles - i), return_acc_rate=True, **kwargs
         )
         log_weights.append(batch_log_weights.detach())

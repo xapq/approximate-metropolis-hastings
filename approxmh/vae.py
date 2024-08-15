@@ -148,7 +148,8 @@ class VAE(torch.nn.Module):
             latent_mean, 
             latent_std.diag() * self.std_factor ** 2
         )
-    
+
+    # DEPRECATED
     def ais_log_marginal_estimate(self, x, kernel_type='ula', precondition=False, **kwargs):
         if kernel_type == 'ula':
             mh_corrected=False
@@ -168,6 +169,7 @@ class VAE(torch.nn.Module):
             **kwargs
         )
 
+    # DEPRECATED
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
     def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64, return_variance=True):

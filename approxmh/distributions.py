@@ -2,7 +2,6 @@ from abc import ABC, abstractmethod
 import torch
 import torch.distributions as td
 import math
-import numpy as np
 
 
 class Distribution(ABC):
