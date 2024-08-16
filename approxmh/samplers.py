@@ -5,7 +5,8 @@ import numbers
 import statistics
 import matplotlib.pyplot as plt
 
-from .sequential_mcmc import LangevinKernel
+from .vae import VAE, VAETrainer
+from .kernels import LangevinKernel, iSIRKernel
 from .y_utils import *
 
 
@@ -145,9 +146,13 @@ class LocalGlobalSampler:
     def __init__(self, **kwargs):
         self.target = kwargs.get("target")
         self.global_model = kwargs.get("global_model")
-        self.model_log_likelihood_estimate = kwargs.get("model_log_likelihood_estimate")
         self.n_local_steps = kwargs.get("n_local_steps")
-        self.n_isir_particles = kwargs.get("n_isir_particles", 10)
+        self.global_kernel = iSIRKernel(
+            proposal=self.global_model,
+            target=self.target,
+            n_particles=kwargs.get("n_isir_particles", 10),
+            proposal_log_prob=kwargs.get("model_likelihood_estimate")
+        )
         self.local_step_size = kwargs.get("local_step_size")
         self.device = kwargs.get("device", "cpu")
         
@@ -164,18 +169,46 @@ class LocalGlobalSampler:
                 local_acc_probs.append(acc_prob)
                 self.local_steps_left -= 1
             else:
-                self.make_global_step()
+                self.current_state = self.global_kernel.step(self.current_state)
                 self.local_steps_left = self.n_local_steps
             samples.append(self.current_state)
         local_acc_rate = torch.mean(torch.stack(local_acc_probs), dim=0)
         return torch.stack(samples), local_acc_rate
 
-    def make_global_step(self):
-        particles = torch.zeros((self.n_isir_particles, self.target.dim), device=self.device)
-        particles[0] = self.current_state
-        particles[1:] = self.global_model.sample((self.n_isir_particles - 1,))
-        weights = torch.exp(self.target.log_prob(particles) - self.model_log_likelihood_estimate(particles))
-        self.current_state = particles[torch.multinomial(weights, num_samples=1)[0]]
+
+class AdaptiveVAESampler:
+    def __init__(self, **kwargs):
+        self.target = kwargs["target"]
+        self.model = kwargs["model"]
+        self.global_kernel = iSIRKernel(
+            proposal=self.model,
+            target=self.target,
+            n_particles=kwargs.get("n_isir_particles", 8),
+            proposal_log_prob=kwargs["model_log_prob"]
+        )
+        self.device = kwargs.get("device", "cpu")
+        # self.retrain_frequency = kwargs.get("retrain_frequency")
+        self.sample_history = kwargs.get("initial_sample", torch.tensor([]))
+        self.current_state = None
+
+    def retrain(self, clear_sample_history=True, **kwargs):
+        if self.sample_history.size(dim=0) == 0:
+            print('Not enough samples to train on')
+            return
+        # self.model.init_weights()
+        model_trainer = VAETrainer(model=self.model, target=self.target, device=self.device, **kwargs)
+        model_trainer.fit(x_train=self.sample_history.to(self.device), **kwargs)
+        if clear_sample_history:
+            self.sample_history = torch.tensor([])
+
+    def sample(self, n_samples=1, add_to_history=True):
+        self.model.eval()
+        with torch.no_grad():
+            new_sample = self.global_kernel.multistep(None, n_steps=n_samples)
+            self.current_state = new_sample[-1]
+            if add_to_history:
+                self.sample_history = torch.cat((self.sample_history, new_sample))
+        return new_sample
 
 
 def get_log_prob_quantile(target, q=0, N=2000):

@@ -13,7 +13,7 @@ from .y_utils import *
 from .distribution_metrics import SlicedDistributionMetric, WassersteinMetric1d
 from .distributions import Distribution, IndependentMultivariateNormal
 from .utilities import dataloader_from_tensor
-from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
+# from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 from .sequential_mcmc import ais_langevin_log_norm_constant_ratio, DensityMixture
 
 
@@ -123,7 +123,11 @@ class VAE(torch.nn.Module):
     def decode(self, z):
         return self.decoder_distribution(z).rsample((1,)).squeeze(0)
 
-    def sample(self, sample_shape=(1,)):
+    def sample(self, sample_shape=torch.Size([])):
+        with torch.no_grad():
+            return self.rsample(sample_shape)
+
+    def rsample(self, sample_shape=torch.Size([])):
         z = self.sample_latent(sample_shape)
         return self.decode(z)
 
@@ -223,8 +227,8 @@ class VAETrainer:
         self.batch_size = kwargs.get("batch_size", 64)
         self.grad_clip = kwargs.get("grad_clip", 1.0)
         self.scheduler = kwargs.get("scheduler", None)
-        self.no_kl_penalty_epochs = kwargs.get("no_kl_penalty_epochs", 40)
-        self.kl_annealing_epochs = kwargs.get("kl_annealing_epochs", 500)
+        self.no_kl_penalty_epochs = kwargs.get("no_kl_penalty_epochs", 0)
+        self.kl_annealing_epochs = kwargs.get("kl_annealing_epochs", 50)
         # optimizer choice
         optimizer = kwargs.get("optimizer", "adam")
         lr = kwargs.get("lr", 1e-3)
@@ -244,7 +248,7 @@ class VAETrainer:
             else:
                 raise ValueError
         # optimizer choice finished
-        warmup_period = kwargs.get("warmup_period", 10)
+        warmup_period = kwargs.get("warmup_period", 1)
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=warmup_period)
 
         self.evaluate_samples_interval = 2000
@@ -258,12 +262,11 @@ class VAETrainer:
         self.mh_sample_scores = []
         self.best_model_weights = None
         
-        self.model.to(self.device)
-        self.model.init_weights()
+        # self.model.init_weights()
 
     def fit(self, x_train, **kwargs):
         x_val = kwargs.get("x_val", self.target.sample((x_train.shape[0] // 10,)))
-        n_epochs = kwargs.get("n_epochs", 800)
+        n_epochs = kwargs.get("n_epochs")
         plot_interval = kwargs.get("plot_interval", n_epochs)
         train_loader = dataloader_from_tensor(x_train, self.batch_size)
         val_loader = dataloader_from_tensor(x_val, self.batch_size)
@@ -344,7 +347,6 @@ class VAETrainer:
         mean_z, log_var_z = self.model.encoding_parameters(x)
         z = self.model.reparameterize(mean_z, log_var_z)
         mean_recon_x, log_var_recon_x = self.model.decoding_parameters(z)
-        # BULLSHIT => recon_loss = F.mse_loss(recon_x, x, reduction='mean')
         recon_loss = -mean_field_log_prob(x - mean_recon_x, log_var_recon_x.exp()).mean()
         kl_div = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1).mean()
         return recon_loss, kl_div

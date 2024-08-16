@@ -1,6 +1,5 @@
 import torch
 import math, statistics
-from abc import ABC, abstractmethod
 from .distributions import IndependentMultivariateNormal
 
 
@@ -13,76 +12,6 @@ class DensityMixture:
 
     def log_prob(self, x):
         return self.power1 * self.distribution1.log_prob(x) + self.power2 * self.distribution2.log_prob(x)
-
-
-class MarkovKernel(ABC):
-    @abstractmethod
-    def step(self, x, n_steps=1):
-        '''
-        Apply the kernel to x `n_steps` times
-        '''
-        raise NotImplementedError
-
-    @abstractmethod
-    def log_prob(self, x, y):
-        '''
-        Return the transition density from x to y if it exists
-        '''
-        raise NotImplementedError
-
-
-class LangevinKernel(MarkovKernel):
-    # mh_corrected=False -> ULA, mh_corrected=True -> MALA
-    def __init__(self, stationary_distribution, time_step, mh_corrected: bool):
-        super().__init__()
-        self.negative_energy = stationary_distribution.log_prob
-        self.time_step = time_step
-        self.mh_corrected = mh_corrected
-
-    def step(self, x, return_acc_prob=True):
-        y = self.step_distribution(x).sample()
-        acc_prob = self.acceptance_probability(x, y)
-        if self.mh_corrected:
-            rejected = torch.rand_like(acc_prob) > acc_prob
-            y += (x - y) * rejected.unsqueeze(-1)
-        if return_acc_prob:
-            return y, acc_prob.detach()
-            # print(acc_prob.mean().item())
-        return y
-
-    def log_prob(self, x, y):
-        if self.mh_corrected:
-            raise NotImplementedError('MALA kerneles do not have a transition density')
-        return self.step_distribution(x).log_prob(y)
-        
-    def step_distribution(self, x):
-        return IndependentMultivariateNormal(
-            mean=x + self.time_step * self._grad_negative_energy(x),
-            std=torch.as_tensor(2 * self.time_step, device=x.device).sqrt(),
-        )
-    
-    # Metropolis-Hastings acceptance probability
-    def acceptance_probability(self, x, y):
-        return torch.minimum(torch.exp(
-            self.negative_energy(y) + self.step_distribution(y).log_prob(x) -
-            self.negative_energy(x) - self.step_distribution(x).log_prob(y)
-        ), torch.tensor(1.))
-    
-    def _grad_negative_energy(self, x):
-        x = x.detach().requires_grad_(True)
-        sum_negative_energy = self.negative_energy(x).sum()
-        return torch.autograd.grad(sum_negative_energy, x)[0]
-
-
-# helper classes
-class ULAKernel(LangevinKernel):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, mh_corrected=False, **kwargs)
-
-class MALAKernel(LangevinKernel):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, mh_corrected=True, **kwargs)
-
 
 def create_annealing_schedule(n_steps, scheme, scale=1.):
     if scheme == 'linear':

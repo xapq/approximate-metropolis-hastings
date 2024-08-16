@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 import torch
 import math
-from .sequential_mcmc import run_annealed_importance_sampling, LangevinKernel, ULAKernel, MALAKernel
+from .sequential_mcmc import run_annealed_importance_sampling
+from .kernels import LangevinKernel, ULAKernel, MALAKernel
 
 
 class MonteCarloLikelihoodEstimator(ABC):

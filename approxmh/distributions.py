@@ -85,8 +85,8 @@ def create_random_gaussian_mixture(dim, n_components, mean_lim=(0, 1), variance_
 
 
 def create_serpentine(n_sections=1, section_width=1., section_height=5., device='cpu'):
-    thickness = 0.1
-    length = 0.3
+    thickness = 0.05
+    length = 0.25
     n_components = 2 * n_sections - 1
     means = torch.zeros((n_components, 2), device=device)
     stds = torch.ones((n_components, 2), device=device) * thickness
@@ -127,6 +127,10 @@ class IndependentMultivariateNormal(Distribution):
         x *= self.std
         x += self.mean
         return x
+
+    @property
+    def friendly_name(self):
+        return 'Independent Multivariate Normal'
 
 
 class DoubleWell(Distribution):
