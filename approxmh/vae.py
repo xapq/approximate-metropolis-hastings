@@ -233,7 +233,7 @@ class VAETrainer:
         optimizer = kwargs.get("optimizer", "adam")
         lr = kwargs.get("lr", 1e-3)
         wd = kwargs.get("wd", 1e-4)
-        momentum = kwargs.get("momentum",0.9)
+        momentum = kwargs.get("momentum", 0.9)
         if isinstance(optimizer, torch.optim.Optimizer):
             self.optimizer = optimizer
         elif isinstance(optimizer, str):
@@ -270,6 +270,8 @@ class VAETrainer:
         plot_interval = kwargs.get("plot_interval", n_epochs)
         train_loader = dataloader_from_tensor(x_train, self.batch_size)
         val_loader = dataloader_from_tensor(x_val, self.batch_size)
+        self.plot_from = kwargs.get("plot_from", 40)
+        self.x_train = x_train  # bruh
 
         # filters & sample score
         L = 64
@@ -320,6 +322,12 @@ class VAETrainer:
         self.model.load_state_dict(self.best_model_weights)
         self.model.eval()
 
+    def tune_encoder(self, n_decoder_samples, **kwargs):
+        self.model.decoder.requires_grad_(False)
+        x_train = self.model.sample((n_decoder_samples,))
+        self.fit(x_train, **kwargs)
+        self.model.decoder.requires_grad_(True)
+    
     def run_epoch(self, data_loader, is_train):
         self.model.train(is_train)
         avg_loss = 0.0
@@ -357,7 +365,7 @@ class VAETrainer:
         return min(1., (self.epoch - self.no_kl_penalty_epochs) / self.kl_annealing_epochs)
 
     def show_training_plot(self):
-        plot_from = 40
+        plot_from = self.plot_from
         clear_output(wait=True)
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
 
@@ -383,14 +391,17 @@ class VAETrainer:
         
         ax = axs[0][1]
         target_samples = self.target.sample((self.n_eval_samples,))
-        sample_scatter(ax, target_samples, label='Target Samples')
+        training_samples = self.x_train  # bruh
+        sample_scatter(ax, target_samples, color='lightblue', label='Target Samples')
+        sample_scatter(ax, training_samples, label='Training Samples')
         good_xlim = ax.get_xlim()
         good_ylim = ax.get_ylim()
         sample_scatter(ax, self.model.sample((self.n_eval_samples,)), label='VAE Samples')
         
         ax = axs[1][1]
         reconstructed_target = self.model.reconstruct(target_samples)
-        sample_scatter(ax, target_samples, label='Target Samples')
+        sample_scatter(ax, target_samples, color='lightblue', label='Target Samples')
+        # sample_scatter(ax, training_samples, color='lightblue', label='Training Samples')
         sample_scatter(ax, reconstructed_target, label='Reconstructed Target Samples', color='green')
         
         for ax in (axs[0][1], axs[1][1]):
@@ -404,6 +415,81 @@ class VAETrainer:
         print(f'\tValidation loss: {self.val_loss_hist[-1]:.4f}')
         print(f'\tLearning rate: {self.optimizer.param_groups[0]["lr"]}')
 
+
+class AdaptiveVAETrainer:
+    def __init__(self, model, target, **kwargs):
+        self.model = model
+        self.target = target
+        self.model_log_likelihood = kwargs.get("model_log_likelihood")
+        self.device = kwargs.get("device", "cpu")
+        # self.batch_size = kwargs.get("batch_size", 64)
+        self.grad_clip = kwargs.get("grad_clip", 1.0)
+        self.scheduler = kwargs.get("scheduler")
+        self.backward_kl_factor = kwargs.get("backward_kl_factor", 0.)
+        self.no_kl_penalty_batches = kwargs.get("no_kl_penalty_batches", 0)
+        self.kl_annealing_batches = kwargs.get("kl_annealing_batches", 1)
+        # optimizer choice
+        optimizer = kwargs.get("optimizer", "adam")
+        lr = kwargs.get("lr", 1e-3)
+        wd = kwargs.get("wd", 1e-4)
+        momentum = kwargs.get("momentum", 0.9)
+        if isinstance(optimizer, torch.optim.Optimizer):
+            self.optimizer = optimizer
+        elif isinstance(optimizer, str):
+            if optimizer.lower() == "adam":
+                self.optimizer = torch.optim.Adam(
+                    model.parameters(), lr=lr, weight_decay=wd
+                )
+            elif optimizer.lower() == "sgd":
+                self.optimizer = torch.optim.SGD(
+                    model.parameters(), lr=lr, weight_decay=wd, momentum=momentum
+                )
+            else:
+                raise ValueError
+        # optimizer choice finished
+        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=kwargs.get("warmup_period", 1))
+
+        self.batch_n = 0
+        self.loss_history = []
+
+    def sample_and_train(self, batch_size=128):
+        model_samples = self.model.rsample((batch_size,))
+        # P - target distribution, Q - model distribution
+        logp = self.target.log_prob(model_samples)
+        with torch.no_grad():
+            logq = self.model_log_likelihood(model_samples)
+        logw = logp.detach() - logq
+        assert(not logw.requires_grad)
+        
+        importance_weights = torch.softmax(logw.detach(), dim=0)
+        losses = self.losses(model_samples)
+        classic_vae_loss = torch.sum(importance_weights * losses)
+        # backward_kl = -logp.mean()  # this is not KL(Q||P) (optional)
+        loss = classic_vae_loss # + self.backward_kl_factor * backward_kl
+
+        self.loss_history.append(loss.item())
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+        self.optimizer.step()
+        return model_samples
+
+    def losses(self, x):
+        reconstruction_loss, kl_divergence = self.loss_components(x)
+        return reconstruction_loss + self.get_kl_loss_factor() * kl_divergence
+        
+    def loss_components(self, x):
+        mean_z, log_var_z = self.model.encoding_parameters(x)
+        z = self.model.reparameterize(mean_z, log_var_z)
+        mean_recon_x, log_var_recon_x = self.model.decoding_parameters(z)
+        reconstruction_loss = -mean_field_log_prob(x - mean_recon_x, log_var_recon_x.exp())
+        kl_divergence = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1)
+        return reconstruction_loss, kl_divergence
+
+    def get_kl_loss_factor(self):
+        if self.batch_n <= self.no_kl_penalty_batches:
+            return 0.01
+        return min(1., (self.batch_n - self.no_kl_penalty_batches) / self.kl_annealing_batches)
 
 def get_filename(model, target):
     filename = f'{model}__{target}.pt'

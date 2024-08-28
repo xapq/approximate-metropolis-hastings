@@ -95,19 +95,20 @@ class SlicedDistributionMetric(DistributionMetric):
 
 ### TODO: remove duplicate code with SlicedDistributionMetric
 class CoordinateDistributionMetric(DistributionMetric):
-    def __init__(self, metric_1d, mode='mean'):
+    def __init__(self, metric_1d, projection_coordinates=(0,), mode='mean'):
         self.metric_1d = metric_1d
+        self.projection_coordinates = projection_coordinates
         self.mode = mode
 
     def __call__(self, sample1, sample2):
         assert(sample1.shape[-1] == sample2.shape[-1])
         metric_1d_values = []
-        for i in range(self.n_projections):
+        for i in self.projection_coordinates:
             metric_1d_values.append(
                 self.metric_1d(sample1[..., i], sample2[..., i])
             )
         if self.mode == 'mean':
-            return sum(metric_1d_values) / self.n_projections
+            return sum(metric_1d_values) / len(self.projection_coordinates)
         if self.mode == 'max':
             return max(metric_1d_values)
         raise ValueError('Invalid mode')

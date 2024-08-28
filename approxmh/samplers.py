@@ -142,6 +142,32 @@ def approximate_metropolis_hastings_reevaluation(target, proposer, proposal_log_
     return acc_rate, samples_indicies[burn_in:]
 
 
+class MetropolisHastingsFilter:
+    def __init__(self, proposal, target, **kwargs):
+        self.proposal = proposal
+        self.target = target
+        if "proposal_log_prob" in kwargs:
+            self.proposal_log_prob = kwargs["proposal_log_prob"]
+        else:
+            self.proposal_log_prob = self.proposal.log_prob
+
+    def apply(self, proposal_samples):
+        n_samples = proposal_samples.shape[0]
+        log_weights = self._calculate_log_weights(proposal_samples)
+        log_weights = log_weights.to("cpu")
+        mh_indicies = torch.arange(n_samples)
+        acc_noise = torch.rand(n_samples)
+        for t in range(n_samples):
+            last_index = mh_indicies[t - 1]
+            acc_prob = torch.exp(log_weights[t] - log_weights[last_index]).item()
+            if acc_noise[t] > acc_prob:  # reject
+                mh_indicies[t] = last_index
+        return proposal_samples[mh_indicies]
+
+    def _calculate_log_weights(self, x):
+        return self.target.log_prob(x) - self.proposal_log_prob(x)
+
+
 class LocalGlobalSampler:
     def __init__(self, **kwargs):
         self.target = kwargs.get("target")
@@ -180,35 +206,52 @@ class AdaptiveVAESampler:
     def __init__(self, **kwargs):
         self.target = kwargs["target"]
         self.model = kwargs["model"]
+        self.use_probability_cutoff = kwargs.get("use_probability_cutoff", True)
+        '''
         self.global_kernel = iSIRKernel(
-            proposal=self.model,
+            proposal=self.global_model,
             target=self.target,
-            n_particles=kwargs.get("n_isir_particles", 8),
-            proposal_log_prob=kwargs["model_log_prob"]
+            n_particles=kwargs.get("n_isir_particles", 10),
+            proposal_log_prob=kwargs.get("model_likelihood_estimate")
+        )
+        '''
+        self.global_filter = MetropolisHastingsFilter(
+            proposal=self.model,
+            target = self.target,
+            proposal_log_prob=kwargs.get("model_log_prob")
         )
         self.device = kwargs.get("device", "cpu")
         # self.retrain_frequency = kwargs.get("retrain_frequency")
+        
         self.sample_history = kwargs.get("initial_sample", torch.tensor([]))
         self.current_state = None
 
-    def retrain(self, clear_sample_history=True, **kwargs):
+    # forgetting_alpha -- how much of the previous history we remember
+    def retrain(self, forgetting_alpha=0.5, warm_start=True, **kwargs):
         if self.sample_history.size(dim=0) == 0:
             print('Not enough samples to train on')
             return
-        # self.model.init_weights()
+        if not warm_start:
+            self.model.init_weights()
         model_trainer = VAETrainer(model=self.model, target=self.target, device=self.device, **kwargs)
         model_trainer.fit(x_train=self.sample_history.to(self.device), **kwargs)
-        if clear_sample_history:
-            self.sample_history = torch.tensor([])
+        self.probability_cutoff = ProbabilityCutoff(self.target, self.sample_history.shape[0])
+        #if clear_sample_history:
+        #    self.sample_history = torch.tensor([])
+        self.sample_history = self.sample_history[torch.randperm(int(len(self.sample_history) * forgetting_alpha))]
 
     def sample(self, n_samples=1, add_to_history=True):
         self.model.eval()
         with torch.no_grad():
-            new_sample = self.global_kernel.multistep(None, n_steps=n_samples)
-            self.current_state = new_sample[-1]
+            model_sample = self.model.sample((n_samples,))
+            if self.use_probability_cutoff:
+                model_sample = self.probability_cutoff.apply(model_sample)
+            corrected_sample = self.global_filter.apply(model_sample)
+            print(model_sample.shape[0] - corrected_sample.shape[0], 'samples cut')
+            # self.current_state = corrected_sample[-1]
             if add_to_history:
-                self.sample_history = torch.cat((self.sample_history, new_sample))
-        return new_sample
+                self.sample_history = torch.cat((self.sample_history, corrected_sample))
+        return corrected_sample
 
 
 def get_log_prob_quantile(target, q=0, N=2000):
@@ -224,3 +267,12 @@ def log_prob_cutoff_filter(target, samples, cutoff_min, cutoff_max=torch.inf, re
     if return_indicies:
         return acc_rate.item(), cut_indicies
     return acc_rate.item(), samples[cut_indicies]
+
+
+class ProbabilityCutoff:
+    def __init__(self, distribution, sample_size):
+        self.distribution = distribution
+        self.min_log_prob = torch.min(self.distribution.log_prob(self.distribution.sample((sample_size,))))
+
+    def apply(self, sample):
+        return sample[self.distribution.log_prob(sample) >= self.min_log_prob]

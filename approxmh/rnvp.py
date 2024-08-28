@@ -283,10 +283,14 @@ class RNVP(nn.Module):
     #     z, logp = self.inverse(x)
     #     return self.prior.log_prob(z) + logp
 
-    def sample(self, shape):
+    def rsample(self, shape):
         z = self.prior.sample(shape)
         x, log_jacob_inv = self.inverse(z)
         self.log_jacob = -log_jacob_inv
         self.x = x
         self.z = z
         return x
+
+    def sample(self, shape):
+        with torch.no_grad():
+            return self.rsample(shape)

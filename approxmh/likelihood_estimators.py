@@ -71,7 +71,7 @@ class SISLikelihoodEstimator(MonteCarloLikelihoodEstimator):
             self.kernel_property = "invariant"
         elif self.kernel_type == "ula":
             self.kernel = ULAKernel
-            self.kernel_property = "almost_reversible"
+            self.kernel_property = "almost_invertible"
         else:
             raise ValueError("kernel_type must be one of ['ula', 'mala']")
 

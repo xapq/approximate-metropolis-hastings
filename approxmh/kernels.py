@@ -44,7 +44,7 @@ class iSIRKernel(MarkovKernel):
         weights = self._calculate_weight(particles)
         return particles[torch.multinomial(weights, num_samples=1)[0]]
 
-    def multistep(self, x, n_steps):
+    def multistep(self, x, n_steps,):
         if x is None:
             x = self.proposal.sample((1,)).squeeze(dim=0)
         particles = torch.zeros((self.n_particles + 1, n_steps, self.target.dim))
@@ -55,6 +55,17 @@ class iSIRKernel(MarkovKernel):
         weights[-1][0] = self._calculate_weight(x.unsqueeze(0)).squeeze(0)
         current_state_idx = -1
         for i in range(n_steps):
+            nan_mask = torch.isnan(weights[:, i])
+            inf_mask = torch.isinf(weights[:, i])
+            if torch.any(nan_mask):
+                print('NaN encountered in weights')
+                print(torch.sum(nan_mask), 'NaNs')
+                print(particles[:, i][nan_mask])
+            if torch.any(inf_mask):
+                print('inf encountered in weights')
+                print(torch.sum(inf_mask), 'Infs')
+                print(weights[:, i][inf_mask])
+                print(particles[:, i][inf_mask])
             new_state_idx = torch.multinomial(weights[:, i], num_samples=1)[0]
             particles[-1][i] = particles[new_state_idx][i]
             if i + 1 < n_steps:
