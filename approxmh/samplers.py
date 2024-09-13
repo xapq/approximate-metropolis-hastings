@@ -168,6 +168,58 @@ class MetropolisHastingsFilter:
         return self.target.log_prob(x) - self.proposal_log_prob(x)
 
 
+class VAEGlobalMHFilter:
+    def __init__(self, vae, target):
+        self.vae = vae
+        self.target = target
+
+    def apply(self, x, z):
+        assert(x.shape[0] == z.shape[0])
+        n_samples = x.shape[0]
+        with torch.no_grad():
+            log_weights = self.target.log_prob(x) + \
+                          self.vae.encoder_distribution(x).log_prob(z) - \
+                          self.vae.joint_log_prob(x, z)
+        log_weights = log_weights.to("cpu")
+        mh_indicies = torch.arange(n_samples)
+        acc_noise = torch.rand(n_samples)
+        for t in range(n_samples):
+            last_index = mh_indicies[t - 1]
+            acc_prob = torch.exp(log_weights[t] - log_weights[last_index]).item()
+            if acc_noise[t] > acc_prob:  # reject
+                mh_indicies[t] = last_index
+        return x[mh_indicies]
+
+
+class VAEMetropolisWithinGibbsSampler:
+    def __init__(self, vae, target):
+        self.vae = vae
+        self.target = target
+
+    @torch.no_grad()
+    def sample(self, n_samples):
+        z = self.vae.prior.sample()  # current z
+        x = self.vae.decode(z)  # current x
+        samples = []
+        acc_noise = torch.rand(n_samples)
+        for t in range(n_samples):
+            # Update x
+            new_x = self.vae.decode(z)
+            acc_prob = torch.exp(self._log_weight(new_x, z) - self._log_weight(x, z))
+            if acc_noise[t] < acc_prob:  # accept
+                x = new_x
+            samples.append(x.clone())
+            # Update z
+            z = self.vae.encode(x)
+        samples = torch.stack(samples, dim=0).squeeze(1)
+        return samples
+
+    # when updating x while keeping z fixed
+    @torch.no_grad()
+    def _log_weight(self, x, z):
+        return self.target.log_prob(x) + self.vae.encoder_distribution(x).log_prob(z) - self.vae.decoder_distribution(z).log_prob(x)
+
+
 class LocalGlobalSampler:
     def __init__(self, **kwargs):
         self.target = kwargs.get("target")

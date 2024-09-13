@@ -90,6 +90,8 @@ class VAE(torch.nn.Module):
 
     # p(x|z)
     def decoder_distribution(self, z):
+        if len(z.shape) == 1:  # non-batched input
+            z = z.unsqueeze(0)
         mean_x, log_var_x = self.decoding_parameters(z)
         std_x = torch.exp(0.5 * log_var_x)
         return IndependentMultivariateNormal(mean_x, std_x)
@@ -133,6 +135,15 @@ class VAE(torch.nn.Module):
 
     def sample_latent(self, sample_shape=(1,)):
         return self.latent_sampling_distribution.sample(sample_shape)
+
+    def joint_log_prob(self, x, z):
+        return self.prior.log_prob(z) + self.decoder_distribution(z).log_prob(x)
+
+    def sample_joint(self, sample_shape=torch.Size([])):
+        with torch.no_grad():
+            z = self.sample_latent(sample_shape)
+            x = self.decode(z)
+        return x, z
 
     ### standard deviation multiplier for ancestral sampling
     def set_std_factor(self, std_factor):
@@ -474,6 +485,14 @@ class AdaptiveVAETrainer:
         self.optimizer.step()
         return model_samples
 
+    def train_on_sample(self, training_sample):
+        loss = torch.mean(self.losses(training_sample))
+        self.loss_history.append(loss.item())
+        self.optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+        self.optimizer.step()
+
     def losses(self, x):
         reconstruction_loss, kl_divergence = self.loss_components(x)
         return reconstruction_loss + self.get_kl_loss_factor() * kl_divergence
@@ -490,6 +509,7 @@ class AdaptiveVAETrainer:
         if self.batch_n <= self.no_kl_penalty_batches:
             return 0.01
         return min(1., (self.batch_n - self.no_kl_penalty_batches) / self.kl_annealing_batches)
+
 
 def get_filename(model, target):
     filename = f'{model}__{target}.pt'
