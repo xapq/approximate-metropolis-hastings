@@ -1,6 +1,7 @@
 import torch
 import math, statistics
 from .distributions import IndependentMultivariateNormal
+from .kernels import LangevinKernel
 
 
 class DensityMixture:

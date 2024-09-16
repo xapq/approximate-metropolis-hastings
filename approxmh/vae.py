@@ -187,7 +187,7 @@ class VAE(torch.nn.Module):
     # DEPRECATED
     # beta -- smoothing constant for log-sum-exp
     # assumes self.latent_sampling_distribution hasn't changed since sampling x
-    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64, return_variance=True):
+    def iw_log_marginal_estimate(self, x, L=512, beta=1, batch_L=64, return_variance=False):
         point_estimates = []
         for i in range(0, L, batch_L):
             point_estimates.append(self._iw_log_marginal_estimate_batch(x, min(batch_L, L - i)))
@@ -486,12 +486,17 @@ class AdaptiveVAETrainer:
         return model_samples
 
     def train_on_sample(self, training_sample):
-        loss = torch.mean(self.losses(training_sample))
+        self.batch_n += 1  # :))
+        loss = self.loss(training_sample)
         self.loss_history.append(loss.item())
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
         self.optimizer.step()
+        return loss.item()
+
+    def loss(self, x):
+        return torch.mean(self.losses(x))
 
     def losses(self, x):
         reconstruction_loss, kl_divergence = self.loss_components(x)

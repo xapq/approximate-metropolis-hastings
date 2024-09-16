@@ -173,48 +173,24 @@ class AdaptiveFlowTrainer:
         return model_samples
 
     def train_on_sample(self, training_sample):
-        # Forward KL
-        logq = self.model.log_prob(training_sample)
-        forward_kl = -logq.mean()
-        # Backward KL
-        batch_size = training_sample.shape[0]
-        model_sample = self.model.rsample((batch_size,))
-        logp = self.target.log_prob(model_sample)
-        logq = self.model.log_prob(model_sample)
-        backward_kl = (logq - logp).mean()
-        # Loss
-        loss = self.forward_kl_factor * forward_kl + self.backward_kl_factor * backward_kl
+        loss = self.loss(training_sample)
         # Update
         self.loss_history.append(loss.item())
         self.optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
         self.optimizer.step()
+        return loss.item()
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
+    def loss(self, x):
+        # Forward KL
+        logq = self.model.log_prob(x)
+        forward_kl = -logq.mean()
+        # Backward KL
+        batch_size = x.shape[0]
+        model_sample = self.model.rsample((batch_size,))
+        logp = self.target.log_prob(model_sample)
+        logq = self.model.log_prob(model_sample)
+        backward_kl = (logq - logp).mean()
+        # Loss
+        return self.forward_kl_factor * forward_kl + self.backward_kl_factor * backward_kl
