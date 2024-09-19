@@ -157,7 +157,7 @@ class MetropolisHastingsFilter:
         log_weights = log_weights.to("cpu")
         mh_indicies = torch.arange(n_samples)
         acc_noise = torch.rand(n_samples)
-        for t in range(n_samples):
+        for t in range(1, n_samples):
             last_index = mh_indicies[t - 1]
             acc_prob = torch.exp(log_weights[t] - log_weights[last_index]).item()
             if acc_noise[t] > acc_prob:  # reject
@@ -200,24 +200,56 @@ class VAEMetropolisWithinGibbsSampler:
     def sample(self, n_samples):
         z = self.vae.prior.sample()  # current z
         x = self.vae.decode(z)  # current x
+        x_posterior = self.vae.encoder_distribution(x)
         samples = []
         acc_noise = torch.rand(n_samples)
         for t in range(n_samples):
             # Update x
-            new_x = self.vae.decode(z)
-            acc_prob = torch.exp(self._log_weight(new_x, z) - self._log_weight(x, z))
+            z_conditional = self.vae.decoder_distribution(z)
+            new_x = z_conditional.sample()
+            new_x_posterior = self.vae.encoder_distribution(new_x)
+            acc_prob = torch.exp(
+                self._log_weight(new_x, new_x_posterior, z, z_conditional) - 
+                self._log_weight(x, x_posterior, z, z_conditional)
+            )
             if acc_noise[t] < acc_prob:  # accept
                 x = new_x
+                x_posterior = new_x_posterior
             samples.append(x.clone())
             # Update z
             z = self.vae.encode(x)
         samples = torch.stack(samples, dim=0).squeeze(1)
         return samples
 
+    @torch.no_grad()
+    def sample_effectively(self, n_samples):
+        raise ValueError("Don't use this pls")
+        zs = self.vae.prior.sample((n_samples,))
+        decoder_distributions = self.vae.decoder_distribution(zs)
+        xs = decoder_distributions.sample()
+        target_log_probs = self.target.log_prob(xs)
+        encoder_distributions = self.vae.encoder_distribution(xs)
+        decoder_distributions.move_to('cpu')
+        encoder_distributions.move_to('cpu')
+        xs = xs.to('cpu')
+        zs = zs.to('cpu')
+        mh_indicies = torch.arange(n_samples)
+        acc_noise = torch.rand(n_samples)
+        for t in range(1, n_samples):
+            z = zs[t]
+            l = mh_indicies[t - 1]  # index of last accepted proposal
+            acc_prob = torch.exp(
+                target_log_probs[t] + encoder_distributions[t].log_prob(z) - decoder_distributions[t].log_prob(xs[t]) -
+                target_log_probs[l] - encoder_distributions[l].log_prob(z) + decoder_distributions[t].log_prob(xs[l])
+            )
+            if acc_noise[t] > acc_prob:  # reject
+                mh_indicies[t] = l
+        return xs[mh_indicies]
+
     # when updating x while keeping z fixed
     @torch.no_grad()
-    def _log_weight(self, x, z):
-        return self.target.log_prob(x) + self.vae.encoder_distribution(x).log_prob(z) - self.vae.decoder_distribution(z).log_prob(x)
+    def _log_weight(self, x, x_posterior, z, z_conditional):
+        return self.target.log_prob(x) + x_posterior.log_prob(z) - z_conditional.log_prob(x)
 
 
 class LocalGlobalSampler:

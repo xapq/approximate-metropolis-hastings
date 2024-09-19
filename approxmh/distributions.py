@@ -109,8 +109,17 @@ class IndependentMultivariateNormal(Distribution):
     def __init__(self, mean, std, **kwargs):
         super().__init__(dim=mean.shape[-1], device=mean.device, **kwargs)
         self.mean = mean  # (*batch_dims, data_dim)
-        self.std = std
+        self.std = std    # (*batch_dims, data_dim)
         self.batch_dims = self.mean.shape[:-1]
+
+    def __getitem__(self, key):
+        if len(self.batch_dims) == 0:
+            raise ValueError('Cannot index distribution that is not batched')
+        return IndependentMultivariateNormal(self.mean[key], self.std[key])
+
+    @property
+    def friendly_name(self):
+        return 'Independent Multivariate Normal'
 
     # takes (*sample_shape, *batch_dims, data_dim)-tensor and returns (*sample_shape, *batch_dims)-tensor
     def log_prob(self, x):
@@ -128,9 +137,10 @@ class IndependentMultivariateNormal(Distribution):
         x += self.mean
         return x
 
-    @property
-    def friendly_name(self):
-        return 'Independent Multivariate Normal'
+    def move_to(self, device):
+        self.mean = self.mean.to(device)
+        self.std = self.std.to(device)
+        self.device = device
 
 
 class DoubleWell(Distribution):
