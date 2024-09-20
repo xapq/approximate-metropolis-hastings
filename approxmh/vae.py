@@ -15,6 +15,7 @@ from .distributions import Distribution, IndependentMultivariateNormal
 from .utilities import dataloader_from_tensor
 # from .samplers import metropolis_hastings_filter, log_prob_cutoff_filter
 from .sequential_mcmc import ais_langevin_log_norm_constant_ratio, DensityMixture
+from .model_trainers import ModelTrainer
 
 
 def SequentialFC(dims, activation):
@@ -228,52 +229,21 @@ class VAE(torch.nn.Module):
         self.eval()
 
 
-## TODO: Merge with FlowTrainer
-class VAETrainer:
-    def __init__(self, model, target, **kwargs):
-        self.model = model
-        self.target = target
+class VAETrainer(ModelTrainer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.distribution_metric = kwargs.get("distribution_metric", SlicedDistributionMetric(WassersteinMetric1d(), self.model.data_dim))
-        self.device = kwargs.get("device", "cpu")
         self.batch_size = kwargs.get("batch_size", 64)
-        self.grad_clip = kwargs.get("grad_clip", 1.0)
-        self.scheduler = kwargs.get("scheduler", None)
         self.no_kl_penalty_epochs = kwargs.get("no_kl_penalty_epochs", 0)
         self.kl_annealing_epochs = kwargs.get("kl_annealing_epochs", 50)
-        # optimizer choice
-        optimizer = kwargs.get("optimizer", "adam")
-        lr = kwargs.get("lr", 1e-3)
-        wd = kwargs.get("wd", 1e-4)
-        momentum = kwargs.get("momentum", 0.9)
-        if isinstance(optimizer, torch.optim.Optimizer):
-            self.optimizer = optimizer
-        elif isinstance(optimizer, str):
-            if optimizer.lower() == "adam":
-                self.optimizer = torch.optim.Adam(
-                    model.parameters(), lr=lr, weight_decay=wd
-                )
-            elif optimizer.lower() == "sgd":
-                self.optimizer = torch.optim.SGD(
-                    model.parameters(), lr=lr, weight_decay=wd, momentum=momentum
-                )
-            else:
-                raise ValueError
-        # optimizer choice finished
-        warmup_period = kwargs.get("warmup_period", 1)
-        self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=warmup_period)
 
         self.evaluate_samples_interval = 2000
         self.n_eval_samples = 2000
-        self.epoch = 0
-        self.train_loss_hist = []
-        self.val_loss_hist = []
         self.best_loss = float('inf')
         self.sample_scores = []
         self.cut_sample_scores = []
         self.mh_sample_scores = []
         self.best_model_weights = None
-        
-        # self.model.init_weights()
 
     def fit(self, x_train, **kwargs):
         x_val = kwargs.get("x_val", self.target.sample((x_train.shape[0] // 10,)))
@@ -298,8 +268,8 @@ class VAETrainer:
 
             train_loss = self.run_epoch(train_loader, is_train=True)
             val_loss = self.run_epoch(val_loader, is_train=False)
-            self.train_loss_hist.append(train_loss)
-            self.val_loss_hist.append(val_loss)
+            self.record_loss(train_loss, train=True)
+            self.record_loss(val_loss, train=False)
             
             if val_loss < self.best_loss:
                 self.best_loss = val_loss
@@ -323,12 +293,7 @@ class VAETrainer:
                 # self.model.adapt_latent_sampling_distribution(x_train)
                 self.show_training_plot()
 
-            with self.warmup_scheduler.dampening():
-                if self.scheduler is not None:
-                    if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                        self.scheduler.step(val_loss)
-                    else:
-                        self.scheduler.step()
+            self._finish_epoch()
             
         self.model.load_state_dict(self.best_model_weights)
         self.model.eval()
@@ -347,10 +312,7 @@ class VAETrainer:
                 recon_loss, kl_div = self.loss_components(x)
                 intermediate_loss = recon_loss + self.kl_loss_factor() * kl_div
                 loss = recon_loss + kl_div
-                self.optimizer.zero_grad()
-                intermediate_loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
-                self.optimizer.step()
+                self._step(intermediate_loss)
             else:
                 with torch.no_grad():
                     loss = self.loss(x)
@@ -381,14 +343,15 @@ class VAETrainer:
         fig, axs = plt.subplots(figsize=(10, 10), nrows=2, ncols=2)
 
         ax = axs[0][0]
-        epoch_list = np.arange(self.epoch) + 1
-        ax.plot(epoch_list[plot_from:], self.train_loss_hist[plot_from:], label='Train Loss')
-        # ax.plot(epoch_list[plot_from:], self.val_loss_hist[plot_from:], label='Validation Loss')
+        for train in (True, False):
+            epoch_list, loss_list = self.get_loss_history(train=train)
+            ax.plot(epoch_list[plot_from:], loss_list[plot_from:], label='Train' if train else 'Validation')
         ax.set_xlabel('Epoch')
         ax.set_ylabel('Loss')
         ax.set_title('VAE Training')
 
         ax = axs[1][0]
+        epoch_list = np.arange(self.epoch) + 1
         epoch_list = epoch_list[epoch_list % self.evaluate_samples_interval == 0]
         ax.plot(epoch_list, self.sample_scores, label='Raw VAE samples')
         ax.plot(epoch_list, self.cut_sample_scores, label='Log-prob cutoff Samples')
@@ -422,8 +385,8 @@ class VAETrainer:
             ax.legend()
         plt.show()
         print(f'Epoch {self.epoch}')
-        print(f'\tTrain loss: {self.train_loss_hist[-1]:.4f}')
-        print(f'\tValidation loss: {self.val_loss_hist[-1]:.4f}')
+        print(f'\tTrain loss: {self.train_loss_history[-1][1]:.4f}')
+        print(f'\tValidation loss: {self.val_loss_history[-1][1]:.4f}')
         print(f'\tLearning rate: {self.optimizer.param_groups[0]["lr"]}')
 
 
