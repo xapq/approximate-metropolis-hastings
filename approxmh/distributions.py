@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 import torch
 import torch.distributions as td
+import numpy as np
 import math
 
 
@@ -51,6 +52,34 @@ class GaussianMixture(Distribution):
 
     def log_prob(self, x):
         return self.torch_base.log_prob(x)
+
+
+class PoorlyConditionedGaussian(Distribution):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.min_variance = kwargs.get("min_variance", 1e-1)
+        self.max_variance = kwargs.get("max_variance", 1e+1)
+        self.variances = torch.tensor(np.geomspace(self.min_variance, self.max_variance, num=self.dim), device=self.device)
+        gen = torch.Generator(device=self.device)
+        if "seed" in kwargs:
+            self.seed = kwargs["seed"]
+            gen.manual_seed(self.seed)
+        else:
+            self.seed = gen.seed()
+        self.Q = torch.linalg.qr(torch.rand(self.dim, self.dim, generator=gen, device=self.device)).Q
+        self.name = f'pcg_{self.min_variance}_{self.max_variance}_seed{self.seed}'
+        self.friendly_name = f'{self.dim}D Poorly Conditioned Gaussian'
+
+    def rsample(self, sample_shape=torch.Size([])):
+        result = torch.randn(*sample_shape, self.dim, device=self.device)
+        result *= self.variances ** 0.5
+        result = result @ self.Q.T
+        return result
+
+    def log_prob(self, x):
+        x = x @ self.Q
+        x /= self.variances ** 0.5
+        return (-x ** 2 / 2).sum(axis=-1)
 
 
 def create_gaussian_lattice(shape, variance, device='cpu'):

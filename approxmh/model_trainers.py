@@ -38,7 +38,7 @@ class ModelTrainer:
             if scheduler.lower() == "steplr":
                 step_size = kwargs.get("scheduler_step_size")
                 gamma = kwargs.get("scheduler_gamma", 0.1)
-                self.scheduler = torch.optim.StepLR(self.optimizer, step_size, gamma)
+                self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size, gamma)
             else:
                 raise ValueError("Invalid scheduler specification")
         else:
@@ -97,6 +97,10 @@ class ModelTrainer:
     def get_loss_history(self, train=False):
         loss_history = self.train_loss_history if train else self.val_loss_history
         return zip(*loss_history)
+
+    def clear_loss_history(self):
+        self.train_loss_history = []
+        self.val_loss_history = []
 
 
 class AdaptiveVAETrainer(ModelTrainer):
