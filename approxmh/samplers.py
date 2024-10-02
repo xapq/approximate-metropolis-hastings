@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 from .vae import VAE, VAETrainer
 from .kernels import LangevinKernel, iSIRKernel
+from .distributions import IndependentMultivariateNormal
 from .y_utils import *
 
 
@@ -191,36 +192,55 @@ class VAEGlobalMHFilter:
         return x[mh_indicies]
 
 
+# The naming of this class may no longer be appropriate
 class VAEMetropolisWithinGibbsSampler:
-    def __init__(self, vae, target):
+    def __init__(self, vae, target, latent_noise_variance=0.):
         self.vae = vae
         self.target = target
+        self.noise_sigma = latent_noise_variance ** 0.5
 
     @torch.no_grad()
     def sample(self, n_samples):
-        z = self.vae.prior.sample()  # current z
-        x = self.vae.decode(z)  # current x
+        print('Improved x1')
+        latent_noise = self.noise_sigma * torch.randn(n_samples, self.vae.latent_dim)
+        x = self.vae.sample()  # current x
         x_posterior = self.vae.encoder_distribution(x)
         samples = []
         acc_noise = torch.rand(n_samples)
         for t in range(n_samples):
-            # Update x
-            z_conditional = self.vae.decoder_distribution(z)
-            new_x = z_conditional.sample()
+            # update z
+            z1 = self.vae.encode(x)
+            z1_conditional = self.vae.decoder_distribution(z1)
+            if self.noise_sigma == 0.:
+                z2 = z1
+                z_log_weight = 0
+                z2_conditional = z1_conditional
+            else:
+                p_z2_cond_z1 = self.latent_step_distribution(z1)
+                z2 = p_z2_cond_z1.sample()
+                p_z1_cond_z2 = self.latent_step_distribution(z2)
+                z_log_weight = p_z1_cond_z2.log_prob(z1) - p_z2_cond_z1.log_prob(z2)
+                z2_conditional = self.vae.decoder_distribution(z2)
+            # update x
+            new_x = z2_conditional.sample()
             new_x_posterior = self.vae.encoder_distribution(new_x)
             acc_prob = torch.exp(
-                self._log_weight(new_x, new_x_posterior, z, z_conditional) - 
-                self._log_weight(x, x_posterior, z, z_conditional)
+                z1_conditional.log_prob(x) + new_x_posterior.log_prob(z2) + self.target.log_prob(new_x)
+                - z2_conditional.log_prob(new_x) - x_posterior.log_prob(z1) - self.target.log_prob(x)
+                + z_log_weight
             )
             if acc_noise[t] < acc_prob:  # accept
                 x = new_x
                 x_posterior = new_x_posterior
             samples.append(x.clone())
-            # Update z
-            z = self.vae.encode(x)
         samples = torch.stack(samples, dim=0).squeeze(1)
         return samples
 
+    def latent_step_distribution(self, z):
+        # return IndependentMultivariateNormal(z, self.noise_sigma)
+        return IndependentMultivariateNormal((1 - self.noise_sigma**2) ** 0.5 * z, self.noise_sigma)
+
+    # This is trash
     @torch.no_grad()
     def sample_effectively(self, n_samples):
         raise ValueError("Don't use this pls")

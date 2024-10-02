@@ -67,6 +67,7 @@ class PoorlyConditionedGaussian(Distribution):
         else:
             self.seed = gen.seed()
         self.Q = torch.linalg.qr(torch.rand(self.dim, self.dim, generator=gen, device=self.device)).Q
+        # self.Q = torch.eye(self.dim, device=self.device)
         self.name = f'pcg_{self.min_variance}_{self.max_variance}_seed{self.seed}'
         self.friendly_name = f'{self.dim}D Poorly Conditioned Gaussian'
 
@@ -138,7 +139,7 @@ class IndependentMultivariateNormal(Distribution):
     def __init__(self, mean, std, **kwargs):
         super().__init__(dim=mean.shape[-1], device=mean.device, **kwargs)
         self.mean = mean  # (*batch_dims, data_dim)
-        self.std = std    # (*batch_dims, data_dim)
+        self.std = torch.as_tensor(std)  # (*batch_dims, data_dim)
         self.batch_dims = self.mean.shape[:-1]
 
     def __getitem__(self, key):
@@ -195,9 +196,17 @@ class Funnel(Distribution):
         self.distr1 = td.Normal(torch.zeros(1).to(self.device), self.a)  # Distribution along first coordinate
         self.name = f'funnel_{self.dim}d_a{self.a}'
         self.friendly_name = f'{self.dim}-Dimensional a={self.a} Funnel'
+        # temporary:
+        #gen = torch.Generator(device=self.device)
+        #self.Q = torch.linalg.qr(torch.rand(self.dim, self.dim, generator=gen, device=self.device)).Q
 
     def log_prob(self, x: torch.FloatTensor) -> torch.FloatTensor:
-        normal_first = td.Normal(torch.zeros(x.shape[:-1], device=x.device), torch.exp(x[..., 0] / 2.))
+        #x = x @ self.Q  # temporary
+        variances = torch.maximum(torch.exp(x[..., 0] / 2.), torch.tensor(1e-20))
+        try:
+            normal_first = td.Normal(torch.zeros(x.shape[:-1], device=x.device), variances)
+        except:
+            print(x[..., 0])
         return normal_first.log_prob(x[..., 1:].permute(-1, *range(x.ndim-1))).sum(0) + \
             self.distr1.log_prob(x[..., 0])
 
@@ -205,6 +214,7 @@ class Funnel(Distribution):
         samples  = torch.randn(*sample_shape, self.dim, device=self.device)
         samples[..., 0] *= self.a
         samples[..., 1:] *= (samples[..., 0].unsqueeze(-1) / 2).exp()
+        #samples = samples @ self.Q.T
         return samples
 
 
