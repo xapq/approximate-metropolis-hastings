@@ -120,7 +120,7 @@ def mean_field_log_prob(
     full: bool = False,
     eps: float = 1e-6
 ) -> torch.Tensor:
-    r"""Calculate negative log likelihood of multivariate Gaussian distributions with diagonal covariances and excpectation 0 at given points
+    r"""Calculate negative log likelihood of multivariate Gaussian distributions with diagonal covariances and expectation 0 at given points
 
     Args:
         input: (*, D) tensor. Expectation of the Gaussian distribution.

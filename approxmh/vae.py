@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import torch
 from pytorch_warmup import LinearWarmup
 from torch import nn
@@ -42,29 +43,20 @@ class UnnormalizedPosterior(Distribution):
 
 '''
 Variational Autoencoder
-Encoder and Decoder are made up of FC layers
 '''
-class VAE(torch.nn.Module):
-    def __init__(self, data_dim, hidden_dims, latent_dim, device='cpu'):
+class VAE(torch.nn.Module, ABC):
+    def __init__(self, latent_dim, **kwargs):
         super().__init__()
-        self.data_dim = data_dim
         self.latent_dim = latent_dim
-        self.hidden_dims = hidden_dims
-        encoder_dims = [data_dim, *hidden_dims, 2 * latent_dim]
-        decoder_dims = [latent_dim, *hidden_dims[::-1], 2 * data_dim]
-        activation = lambda : nn.ReLU(inplace=True)
-        self.encoder = SequentialFC(encoder_dims, activation)
-        self.decoder = SequentialFC(decoder_dims, activation)
-        self.device = device
+        self.device = kwargs.get('device', 'cpu')
+        self.latent_distribution = IndependentMultivariateNormal(torch.zeros(self.latent_dim, device=self.device), 1.)
+        # self.latent_sampling_distribution = self.latent_distribution
+        # self.std_factor = 1
+        # self.to(device)
 
-        self.prior = torch.distributions.MultivariateNormal(torch.zeros(latent_dim, device=device), torch.diag(torch.ones(latent_dim, device=device)))
-        self.latent_sampling_distribution = self.prior
-        self.std_factor = 1
-        
-        self.to(device)
-
+    @abstractmethod
     def __repr__(self):
-        return f'y02vae_D{self.data_dim}_layers{self.hidden_dims}'
+        pass
 
     def forward(self, x):
         return reconstruct(x)
@@ -103,19 +95,10 @@ class VAE(torch.nn.Module):
         return mean_z, log_var_z
 
     # parameters of the distribution p(x|z)
+    @abstractmethod
     def decoding_parameters(self, z):
-        if len(z.shape) == 1:  
-            raise ValueError("Cannot implicitly handle non-batched input. Use unsqueeze(dim=0)")   
-        # Remember and flatten original batch dimensions 
-        batch_dims = z.shape[:-1]
-        z = z.flatten(end_dim=-2)
-        # Decoder network
-        mean_and_log_var_x = self.decoder(z).chunk(2, dim=-1)
-        # Restore original batch dimensions
-        mean_x, log_var_x = map(lambda t: t.unflatten(dim=0, sizes=batch_dims),
-                                mean_and_log_var_x)
-        return mean_x, log_var_x
-
+        pass
+    
     # sample distribution q(z|x)
     def encode(self, x):
         mean_z, log_var_z = self.encoding_parameters(x)
@@ -131,14 +114,15 @@ class VAE(torch.nn.Module):
             return self.rsample(sample_shape)
 
     def rsample(self, sample_shape=torch.Size([])):
-        z = self.sample_latent(sample_shape)
+        #z = self.sample_latent(sample_shape)
+        z = self.latent_distribution.sample(sample_shape)
         return self.decode(z)
 
     def sample_latent(self, sample_shape=(1,)):
         return self.latent_sampling_distribution.sample(sample_shape)
 
     def joint_log_prob(self, x, z):
-        return self.prior.log_prob(z) + self.decoder_distribution(z).log_prob(x)
+        return self.latent_distribution.log_prob(z) + self.decoder_distribution(z).log_prob(x)
 
     def sample_joint(self, sample_shape=torch.Size([])):
         with torch.no_grad():
@@ -154,6 +138,7 @@ class VAE(torch.nn.Module):
             torch.eye(self.latent_dim, device=self.device) * std_factor ** 2
         )
 
+    # DEPRECATED
     def adapt_latent_sampling_distribution(self, x, std_factor=None):
         if std_factor is not None:
             self.std_factor = std_factor
@@ -213,9 +198,10 @@ class VAE(torch.nn.Module):
 
     def init_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Linear):
+            if isinstance(m, (nn.Linear, nn.Conv2d, nn.ConvTranspose2d)):
                 init.xavier_uniform_(m.weight)
-                init.constant_(m.bias, 0)
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
 
     def save_knowledge(self, filename):
         save_dict = {
@@ -227,6 +213,91 @@ class VAE(torch.nn.Module):
         checkpoint = torch.load(filename, map_location=self.device)
         self.load_state_dict(checkpoint['model_state_dict'])
         self.eval()
+
+
+'''
+Encoder and Decoder are made up of FC layers
+'''
+class BasicVAE(VAE):
+    def __init__(self, data_dim, hidden_dims, latent_dim, **kwargs):
+        super().__init__(latent_dim, **kwargs)
+        self.data_dim = data_dim
+        self.hidden_dims = hidden_dims
+        encoder_dims = [data_dim, *hidden_dims, 2 * latent_dim]
+        decoder_dims = [latent_dim, *hidden_dims[::-1], 2 * data_dim]
+        activation = lambda : nn.ReLU(inplace=True)
+        self.encoder = SequentialFC(encoder_dims, activation)
+        self.decoder = SequentialFC(decoder_dims, activation)
+
+    def __repr__(self):
+        return f'y02vae_D{self.data_dim}_layers{self.hidden_dims}'
+
+    def decoding_parameters(self, z):
+        if len(z.shape) == 1:  
+            raise ValueError("Cannot implicitly handle non-batched input. Use unsqueeze(dim=0)")   
+        # Remember and flatten original batch dimensions 
+        batch_dims = z.shape[:-1]
+        z = z.flatten(end_dim=-2)
+        # Decoder network
+        mean_and_log_var_x = self.decoder(z).chunk(2, dim=-1)
+        # Restore original batch dimensions
+        mean_x, log_var_x = map(lambda t: t.unflatten(dim=0, sizes=batch_dims),
+                                mean_and_log_var_x)
+        return mean_x, log_var_x
+
+
+def conv_output_size(input_size, kernel_size, stride, padding):
+    return (input_size - kernel_size + 2 * padding) // stride + 1
+
+
+'''
+VAE for working with 28x28 1-channel images
+'''
+class ConvVAE(VAE):
+    def __init__(self, data_dim, latent_dim, **kwargs):
+        super().__init__(latent_dim, **kwargs)
+        kernel_size = 3
+        stride = 2
+        padding = 1
+        conv1_out_channels = 32 
+        conv2_out_channels = 64
+        hidden_dim = 128
+        conv1_dim = conv_output_size(data_dim, kernel_size, stride, padding)
+        conv2_dim = conv_output_size(conv1_dim, kernel_size, stride, padding)
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, conv1_out_channels, kernel_size, stride, padding),
+            nn.ReLU(),
+            nn.BatchNorm2d(conv1_out_channels),
+            nn.Conv2d(conv1_out_channels, conv2_out_channels, kernel_size, stride, padding),
+            nn.ReLU(),
+            nn.BatchNorm2d(conv2_out_channels),
+            nn.Flatten(),
+            nn.Linear(conv2_out_channels * conv2_dim ** 2, hidden_dim),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, latent_dim * 2),
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_dim),
+            nn.Linear(hidden_dim, conv2_out_channels * conv2_dim ** 2),
+            nn.ReLU(),
+            nn.BatchNorm1d(conv2_out_channels * conv2_dim * conv2_dim),
+            nn.Unflatten(1, (conv2_out_channels, conv2_dim, conv2_dim)),
+            nn.ConvTranspose2d(conv2_out_channels, conv1_out_channels, kernel_size, stride, padding, output_padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(conv1_out_channels),
+            nn.ConvTranspose2d(conv1_out_channels, 2, kernel_size, stride, padding, output_padding=1)
+        )
+
+    def __repr__(self):
+        return f'convvae_latent{self.latent_dim}'
+
+    def decoding_parameters(self, z):
+        # mean_x, log_var_x = torch.unbind(self.decoder(z), dim=-3)
+        mean_x, log_var_x = torch.split(self.decoder(z), 1, dim=-3)
+        return mean_x, log_var_x
 
 
 class VAETrainer(ModelTrainer):
