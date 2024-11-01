@@ -10,7 +10,7 @@ from .y_utils import *
 
 PROJECT_PATH = Path(__file__).parent.parent
 MODEL_DIR = Path(PROJECT_PATH, "models")
-CHECKPOINT_DIR = Path(PROJECT_PATH, "gan_checkpoints")
+CHECKPOINT_DIR = Path(PROJECT_PATH, "checkpoints")
 
 
 # torch.tensor to jax.numpy.ndarray

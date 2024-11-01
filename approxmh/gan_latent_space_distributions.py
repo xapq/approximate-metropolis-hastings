@@ -1,8 +1,8 @@
 import torch
+from pathlib import Path
 from torch_mimicry.nets import sngan
 from .utilities import CHECKPOINT_DIR
 from .distributions import Distribution, IndependentMultivariateNormal
-from pathlib import Path
 
 
 """
