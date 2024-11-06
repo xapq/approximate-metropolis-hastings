@@ -138,8 +138,9 @@ def mean_field_log_prob(
     #    raise ValueError("var is of incorrect size")
 
     # Entries of var must be non-negative
-    if torch.any(var < 0):
-        raise ValueError("var has negative entry/entries")
+    ### CHECKING THIS TAKES 97% OF TOTAL mean_field_log_prob TIME
+    # if torch.any(var < 0):
+    #    raise ValueError("var has negative entry/entries")
 
     # Clamp for stability
     var = var.clone()

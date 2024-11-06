@@ -4,3 +4,5 @@ __pycache__
 build/
 checkpoints/
 notebooks/data
+notebooks/log
+datasets/

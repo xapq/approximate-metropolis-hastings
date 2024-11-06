@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from tqdm import tqdm
 import torch
 from pytorch_warmup import LinearWarmup
 from .y_utils import mean_field_log_prob
@@ -59,22 +60,30 @@ class ModelTrainer:
         train_loss = self.process_data_loader(train_loader, is_train=True)
         self.record_loss(train_loss, train=True)
         if val_loader is not None:
-            val_loss = self.process_data_loader(train_loader, is_train=False)
+            val_loss = self.process_data_loader(val_loader, is_train=False)
             self.record_loss(val_loss, train=False)
         self._finish_epoch()
 
     # Calculate the loss on a training or validation set and possibly update model parameters
     def process_data_loader(self, data_loader, is_train=False):
         self.model.train(is_train)
-        avg_loss = 0
-        for x in data_loader:
-            with torch.set_grad_enabled(is_train):
+        sum_losses = 0
+        with torch.set_grad_enabled(is_train):
+            '''with torch.profiler.profile(
+                    schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                    on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/vae_mnist_training'),
+                    record_shapes=True,
+                    profile_memory=True,
+                    with_stack=True
+            ) as prof:'''
+            for x in tqdm(data_loader):
+                # prof.step()
+                x = x.to(self.model.device)
                 loss = self.loss(x)
-            if is_train:
-                self._step(loss)
-            avg_loss += loss.item() * x.size(0)
-        avg_loss /= len(data_loader.dataset)
-        return avg_loss
+                if is_train:
+                    self._step(loss)
+                sum_losses += loss.detach() * x.size(0)
+        return sum_losses.item() / len(data_loader.dataset)
 
     # Update epoch number, learning rate, loss function if needed
     def _finish_epoch(self):

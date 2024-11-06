@@ -8,10 +8,11 @@ class MnistEBMDistribution(Distribution):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # maybe add temperature?
-        CHECKPOINT_FILE = 'MNIST_NonlocalNet_050000.pth'
+        CHECKPOINT_FILE = 'MNIST_NonlocalNet_100000.pth'
         self.model = NonlocalNet(n_c=1)
         self.model.load_state_dict(torch.load(Path(CHECKPOINT_DIR, CHECKPOINT_FILE), map_location=self.device))
         self.model.eval()
+        self.model.to(self.device)
         for param in self.model.parameters():
             param.requires_grad_(False)
         self.name = f'mnist_ebm'

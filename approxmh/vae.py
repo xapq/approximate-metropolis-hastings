@@ -52,7 +52,6 @@ class VAE(torch.nn.Module, ABC):
         self.latent_distribution = IndependentMultivariateNormal(torch.zeros(self.latent_dim, device=self.device), 1.)
         # self.latent_sampling_distribution = self.latent_distribution
         # self.std_factor = 1
-        # self.to(device)
 
     @abstractmethod
     def __repr__(self):
@@ -259,9 +258,9 @@ class ConvVAE(VAE):
         kernel_size = 3
         stride = 2
         padding = 1
-        conv1_out_channels = 32 
-        conv2_out_channels = 64
-        hidden_dim = 128
+        conv1_out_channels = 16 
+        conv2_out_channels = 32
+        hidden_dim = 64
         conv1_dim = conv_output_size(data_dim, kernel_size, stride, padding)
         conv2_dim = conv_output_size(conv1_dim, kernel_size, stride, padding)
         self.encoder = nn.Sequential(
