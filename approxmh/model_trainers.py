@@ -10,7 +10,7 @@ class ModelTrainer:
         # Properties
         self.model = model
         self.target = target
-        self.grad_clip = kwargs.get("grad_clip", 1.0)
+        self.grad_clip = kwargs.get("grad_clip", None)
         # Optimizer
         optimizer = kwargs.get("optimizer", "adam")
         lr = kwargs.get("lr", 1e-3)
@@ -96,7 +96,8 @@ class ModelTrainer:
     def _step(self, loss_value):
         self.optimizer.zero_grad()
         loss_value.backward()
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+        if self.grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
         self.optimizer.step()
 
     def record_loss(self, loss_scalar, train=False):
@@ -132,7 +133,7 @@ class AdaptiveVAETrainer(ModelTrainer):
         mean_recon_x, log_var_recon_x = self.model.decoding_parameters(z)
 
         batch_dim = x.shape[0]
-        # print((x).shape, log_var_recon_x.shape)
+        # print(x.shape, log_var_recon_x.shape)
         reconstruction_loss = -mean_field_log_prob(
             (x - mean_recon_x).view(batch_dim, -1), 
             log_var_recon_x.exp().view(batch_dim, -1)

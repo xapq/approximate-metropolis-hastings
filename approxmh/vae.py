@@ -246,7 +246,7 @@ class BasicVAE(VAE):
 
 
 def conv_output_size(input_size, kernel_size, stride, padding):
-    return (input_size - kernel_size + 2 * padding) // stride + 1
+    return (input_size + 2 * padding - kernel_size) // stride + 1
 
 
 '''
@@ -256,38 +256,52 @@ class ConvVAE(VAE):
     def __init__(self, data_dim, latent_dim, **kwargs):
         super().__init__(latent_dim, **kwargs)
         kernel_size = 3
-        stride = 2
+        stride = 1
         padding = 1
-        conv1_out_channels = 16 
+        conv1_out_channels = 32
         conv2_out_channels = 32
-        hidden_dim = 64
-        conv1_dim = conv_output_size(data_dim, kernel_size, stride, padding)
-        conv2_dim = conv_output_size(conv1_dim, kernel_size, stride, padding)
+        conv3_out_channels = 32
+        prepool_dim1 = conv_output_size(data_dim, kernel_size, stride, padding)
+        dim1 = prepool_dim1 // 2  # width and height after first conv + max pooling
+        prepool_dim2 = conv_output_size(dim1, kernel_size, stride, padding)
+        dim2 = prepool_dim2 // 2  # after second conv + max pooling
+        prepool_dim3 = conv_output_size(dim2, kernel_size, stride, padding)
+        dim3 = prepool_dim3 // 2  # after third conv + max pooling
+        flat_dim = conv3_out_channels * dim3 ** 2  # after flattening
+        # hidden_dim = 64  # hidden linear layer dim
+        print('data_dim:', data_dim, '\ndim1:', dim1, '\ndim2:', dim2, '\ndim3:', dim3, '\nflat_dim:', flat_dim)
+        
         self.encoder = nn.Sequential(
             nn.Conv2d(1, conv1_out_channels, kernel_size, stride, padding),
-            nn.ReLU(),
             nn.BatchNorm2d(conv1_out_channels),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
             nn.Conv2d(conv1_out_channels, conv2_out_channels, kernel_size, stride, padding),
-            nn.ReLU(),
             nn.BatchNorm2d(conv2_out_channels),
-            nn.Flatten(),
-            nn.Linear(conv2_out_channels * conv2_dim ** 2, hidden_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim),
-            nn.Linear(hidden_dim, latent_dim * 2),
+            nn.MaxPool2d(2),
+            nn.Conv2d(conv2_out_channels, conv3_out_channels, kernel_size, stride, padding),
+            nn.BatchNorm2d(conv3_out_channels),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Flatten(),
+            nn.Linear(flat_dim, latent_dim * 2),
         )
         self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
+            nn.Linear(latent_dim, flat_dim),
+            nn.BatchNorm1d(flat_dim),
             nn.ReLU(),
-            nn.BatchNorm1d(hidden_dim),
-            nn.Linear(hidden_dim, conv2_out_channels * conv2_dim ** 2),
+            nn.Unflatten(1, (conv3_out_channels, dim3, dim3)),
+            nn.Upsample(prepool_dim3),
+            nn.ConvTranspose2d(conv3_out_channels, conv2_out_channels, kernel_size, stride, padding),
+            nn.BatchNorm2d(conv2_out_channels),
             nn.ReLU(),
-            nn.BatchNorm1d(conv2_out_channels * conv2_dim * conv2_dim),
-            nn.Unflatten(1, (conv2_out_channels, conv2_dim, conv2_dim)),
-            nn.ConvTranspose2d(conv2_out_channels, conv1_out_channels, kernel_size, stride, padding, output_padding=1),
-            nn.ReLU(),
+            nn.Upsample(prepool_dim2),
+            nn.ConvTranspose2d(conv2_out_channels, conv1_out_channels, kernel_size, stride, padding),
             nn.BatchNorm2d(conv1_out_channels),
-            nn.ConvTranspose2d(conv1_out_channels, 2, kernel_size, stride, padding, output_padding=1)
+            nn.ReLU(),
+            nn.Upsample(prepool_dim1),
+            nn.ConvTranspose2d(conv1_out_channels, 2, kernel_size, stride, padding)
         )
 
     def __repr__(self):
@@ -296,6 +310,7 @@ class ConvVAE(VAE):
     def decoding_parameters(self, z):
         # mean_x, log_var_x = torch.unbind(self.decoder(z), dim=-3)
         mean_x, log_var_x = torch.split(self.decoder(z), 1, dim=-3)
+        # mean_x = 2 * torch.sigmoid(mean_x) - 1
         return mean_x, log_var_x
 
 
