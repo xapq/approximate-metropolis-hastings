@@ -138,7 +138,7 @@ def mean_field_log_prob(
     #    raise ValueError("var is of incorrect size")
 
     # Entries of var must be non-negative
-    ### CHECKING THIS TAKES 97% OF TOTAL mean_field_log_prob TIME
+    ### CHECKING THIS CAUSES CUDA GPU SYNC WHICH MUST BE AVOIDED AT ALL COSTS
     # if torch.any(var < 0):
     #    raise ValueError("var has negative entry/entries")
 

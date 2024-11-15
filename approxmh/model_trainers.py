@@ -69,15 +69,7 @@ class ModelTrainer:
         self.model.train(is_train)
         sum_losses = 0
         with torch.set_grad_enabled(is_train):
-            '''with torch.profiler.profile(
-                    schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
-                    on_trace_ready=torch.profiler.tensorboard_trace_handler('./log/vae_mnist_training'),
-                    record_shapes=True,
-                    profile_memory=True,
-                    with_stack=True
-            ) as prof:'''
             for x in tqdm(data_loader):
-                # prof.step()
                 x = x.to(self.model.device)
                 loss = self.loss(x)
                 if is_train:
@@ -135,8 +127,8 @@ class AdaptiveVAETrainer(ModelTrainer):
         batch_dim = x.shape[0]
         # print(x.shape, log_var_recon_x.shape)
         reconstruction_loss = -mean_field_log_prob(
-            (x - mean_recon_x).view(batch_dim, -1), 
-            log_var_recon_x.exp().view(batch_dim, -1)
+            (x - mean_recon_x).flatten(start_dim=1), # .view(batch_dim, -1)
+            log_var_recon_x.exp().flatten(start_dim=1)
         )
         kl_divergence = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1)
         return reconstruction_loss, kl_divergence

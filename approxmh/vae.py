@@ -301,16 +301,21 @@ class ConvVAE(VAE):
             nn.BatchNorm2d(conv1_out_channels),
             nn.ReLU(),
             nn.Upsample(prepool_dim1),
-            nn.ConvTranspose2d(conv1_out_channels, 2, kernel_size, stride, padding)
+            nn.ConvTranspose2d(conv1_out_channels, 1, kernel_size, stride, padding)
         )
+        
+        # EXPERIMENTAL
+        self.decoder_log_var = nn.Parameter(torch.tensor(-2.))
 
     def __repr__(self):
         return f'convvae_latent{self.latent_dim}'
 
     def decoding_parameters(self, z):
-        # mean_x, log_var_x = torch.unbind(self.decoder(z), dim=-3)
-        mean_x, log_var_x = torch.split(self.decoder(z), 1, dim=-3)
-        # mean_x = 2 * torch.sigmoid(mean_x) - 1
+        #$$$ mean_x, log_var_x = torch.unbind(self.decoder(z), dim=-3)
+        # mean_x, log_var_x = torch.split(self.decoder(z), 1, dim=-3)
+        mean_x = self.decoder(z)
+        log_var_x = self.decoder_log_var.expand(mean_x.shape)
+        #$$$ mean_x = 2 * torch.sigmoid(mean_x) - 1
         return mean_x, log_var_x
 
 

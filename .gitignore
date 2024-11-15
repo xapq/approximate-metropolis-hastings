@@ -3,6 +3,5 @@ __pycache__
 *.egg-info/
 build/
 checkpoints/
-notebooks/data
-notebooks/log
+log/
 datasets/
