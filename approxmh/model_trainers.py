@@ -122,14 +122,8 @@ class AdaptiveVAETrainer(ModelTrainer):
     def loss_components(self, x):
         mean_z, log_var_z = self.model.encoding_parameters(x)
         z = self.model.reparameterize(mean_z, log_var_z)
-        mean_recon_x, log_var_recon_x = self.model.decoding_parameters(z)
-
-        batch_dim = x.shape[0]
-        # print(x.shape, log_var_recon_x.shape)
-        reconstruction_loss = -mean_field_log_prob(
-            (x - mean_recon_x).flatten(start_dim=1), # .view(batch_dim, -1)
-            log_var_recon_x.exp().flatten(start_dim=1)
-        )
+        reconstruction_distribution = self.model.decoder_distribution(z)
+        reconstruction_loss = -reconstruction_distribution.log_prob(x)
         kl_divergence = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1)
         return reconstruction_loss, kl_divergence
 

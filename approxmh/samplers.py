@@ -201,7 +201,6 @@ class VAEMetropolisWithinGibbsSampler:
 
     @torch.no_grad()
     def sample(self, n_samples):
-        print('Improved x1')
         latent_noise = self.noise_sigma * torch.randn(n_samples, self.vae.latent_dim)
         x = self.vae.sample()  # current x
         x_posterior = self.vae.encoder_distribution(x)
@@ -229,6 +228,10 @@ class VAEMetropolisWithinGibbsSampler:
                 - z2_conditional.log_prob(new_x) - x_posterior.log_prob(z1) - self.target.log_prob(x)
                 + z_log_weight
             )
+            print('self.target.log_prob(new_x) - self.target.log_prob(x):', (self.target.log_prob(new_x) - self.target.log_prob(x)).item())
+            print('z1_conditional.log_prob(x)', (z1_conditional.log_prob(x)).item())
+            print('z2_conditional.log_prob(new_x)', (z2_conditional.log_prob(new_x)).item())
+            print(acc_prob)
             if acc_noise[t] < acc_prob:  # accept
                 x = new_x
                 x_posterior = new_x_posterior

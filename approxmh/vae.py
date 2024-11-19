@@ -86,7 +86,7 @@ class VAE(torch.nn.Module, ABC):
             z = z.unsqueeze(0)
         mean_x, log_var_x = self.decoding_parameters(z)
         std_x = torch.exp(0.5 * log_var_x)
-        return IndependentMultivariateNormal(mean_x, std_x)
+        return IndependentMultivariateNormal(mean_x, std_x, n_data_dims=mean_x.dim()-1)
 
     # parameters of the distribution q(z|x)
     def encoding_parameters(self, x):
@@ -209,7 +209,7 @@ class VAE(torch.nn.Module, ABC):
         torch.save(save_dict, filename)
 
     def load_knowledge(self, filename):
-        checkpoint = torch.load(filename, map_location=self.device)
+        checkpoint = torch.load(filename, map_location=self.device, weights_only=True)
         self.load_state_dict(checkpoint['model_state_dict'])
         self.eval()
 

@@ -137,10 +137,11 @@ def create_serpentine(n_sections=1, section_width=1., section_height=5., device=
 
 class IndependentMultivariateNormal(Distribution):
     def __init__(self, mean, std, **kwargs):
-        super().__init__(dim=mean.shape[-1], device=mean.device, **kwargs)
-        self.mean = mean  # (*batch_dims, data_dim)
-        self.std = torch.as_tensor(std)  # (*batch_dims, data_dim)
-        self.batch_dims = self.mean.shape[:-1]
+        super().__init__(device=mean.device, **kwargs)
+        self.mean = mean  # (*batch_dims, *data_dims)
+        self.std = torch.as_tensor(std)  # (*batch_dims, *data_dims)
+        self.dims = self.mean.shape
+        self.n_data_dims = kwargs.get("n_data_dims", 1)
 
     def __getitem__(self, key):
         if len(self.batch_dims) == 0:
@@ -151,18 +152,18 @@ class IndependentMultivariateNormal(Distribution):
     def friendly_name(self):
         return 'Independent Multivariate Normal'
 
-    # takes (*sample_shape, *batch_dims, data_dim)-tensor and returns (*sample_shape, *batch_dims)-tensor
+    # takes (*sample_shape, *batch_dims, *data_dims)-tensor and returns (*sample_shape, *batch_dims)-tensor
     def log_prob(self, x):
         log_density = (
             -((x - self.mean) ** 2) / (2 * self.std ** 2)
             - self.std.log()
             - math.log(math.sqrt(2 * math.pi))
-        ).sum(axis=-1)
+        ).sum(axis=tuple(range(-self.n_data_dims, 0)))
         return log_density
     
-    # returns (*sample_shape, *batch_dims, data_dim)-shaped tensor
+    # returns (*sample_shape, *batch_dims, *data_dims)-shaped tensor
     def rsample(self, sample_shape=torch.Size([])):
-        x = torch.randn(*sample_shape, *self.batch_dims, self.dim, device=self.device)
+        x = torch.randn(*sample_shape, *self.dims, device=self.device)
         x *= self.std
         x += self.mean
         return x
