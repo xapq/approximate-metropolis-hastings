@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from tqdm import tqdm
 import torch
 from pytorch_warmup import LinearWarmup
@@ -49,6 +50,7 @@ class ModelTrainer:
         self.warmup_scheduler = LinearWarmup(self.optimizer, warmup_period=warmup_epochs)
         # Model trainer state
         self.epoch = 0
+        self.logs = defaultdict(list)
         self.train_loss_history = []
         self.val_loss_history = []
 
@@ -58,10 +60,10 @@ class ModelTrainer:
 
     def run_classic_epoch(self, train_loader, val_loader=None):
         train_loss = self.process_data_loader(train_loader, is_train=True)
-        self.record_loss(train_loss, train=True)
+        self.log_data('train_loss', train_loss)
         if val_loader is not None:
             val_loss = self.process_data_loader(val_loader, is_train=False)
-            self.record_loss(val_loss, train=False)
+            self.log_data('val_loss', val_loss)
         self._finish_epoch()
 
     # Calculate the loss on a training or validation set and possibly update model parameters
@@ -92,17 +94,17 @@ class ModelTrainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
         self.optimizer.step()
 
-    def record_loss(self, loss_scalar, train=False):
-        loss_history = self.train_loss_history if train else self.val_loss_history
-        loss_history.append((self.epoch, loss_scalar))
+    def log_data(self, log_name, data):
+        self.logs[log_name].append((self.epoch, data))
+    
+    def get_log(self, log_name, from_epoch=0):
+        epochs_data = torch.tensor(list(zip(*self.logs[log_name])))  # epochs and data stacked
+        if from_epoch > 0:
+            epochs_data = epochs_data[:, epochs_data[0] >= from_epoch]
+        return epochs_data
 
-    def get_loss_history(self, train=False):
-        loss_history = self.train_loss_history if train else self.val_loss_history
-        return zip(*loss_history)
-
-    def clear_loss_history(self):
-        self.train_loss_history = []
-        self.val_loss_history = []
+    def clear_logs(self):
+        self.logs = defaultdict(list)
 
 
 class AdaptiveVAETrainer(ModelTrainer):
