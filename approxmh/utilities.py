@@ -93,3 +93,7 @@ def visualize_distribution(distribution, xlim=None, ylim=None, levels=30, dpi=30
     ax.set_xlabel(f'x_{proj_dims[0]}')
     ax.set_ylabel(f'x_{proj_dims[1]}')
     ax.set_title(f'{distribution.friendly_name} {" (Projection)" if distribution.dim > 2 else ""}')
+
+
+def sample_from_tensor(t, n_samples):
+    return t[torch.randint(high=len(t), size=(n_samples,))]
