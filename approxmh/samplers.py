@@ -228,9 +228,13 @@ class VAEMetropolisWithinGibbsSampler:
                 - z2_conditional.log_prob(new_x) - x_posterior.log_prob(z1) - self.target.log_prob(x)
                 + z_log_weight
             )
-            print('log p(x|z1) - log q(z1|x)\t\t', (z1_conditional.log_prob(x) - x_posterior.log_prob(z1)).item())
-            print('log q(z2|new_x) - log p(new_x|z2)\t', (new_x_posterior.log_prob(z2) - z2_conditional.log_prob(new_x)).item())
-            print('log \\pi(new_x) - log \\pi(x)\t\t', (self.target.log_prob(new_x) - self.target.log_prob(x)).item())
+            #print('log p(x|z1) - log q(z1|x)\t\t', (z1_conditional.log_prob(x) - x_posterior.log_prob(z1)).item())
+            print('log p(x|z1)\t', z1_conditional.log_prob(x).item())
+            print('-log q(z1|x)\t', -x_posterior.log_prob(z1).item()) 
+            # print("log q(z2|x') - log p(new_x|z2)\t", (new_x_posterior.log_prob(z2) - z2_conditional.log_prob(new_x)).item())
+            print("log q(z2|x')\t", new_x_posterior.log_prob(z2).item())
+            print("-log p(x'|z2)\t", -z2_conditional.log_prob(new_x).item())
+            print("log \\pi(x') - log \\pi(x)\t", (self.target.log_prob(new_x) - self.target.log_prob(x)).item())
             # print('log p(new_x|z2)', (z2_conditional.log_prob(new_x)).item())
             print('Acc. Prob.', acc_prob.item())
             if acc_noise[t] < acc_prob:  # accept
