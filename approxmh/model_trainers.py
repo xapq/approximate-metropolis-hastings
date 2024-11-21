@@ -117,6 +117,7 @@ class AdaptiveVAETrainer(ModelTrainer):
         self.no_latent_loss_epochs = kwargs.get("no_latent_loss_epochs", 0)
         self.loss_annealing_epochs = kwargs.get("loss_annealing_epochs", 1)
         self.model_log_likelihood = kwargs.get("model_log_likelihood")  # only needed for adaptive training
+        self.beta = kwargs.get("beta", 1.)  # extra weighting factor for latent space loss
 
     def loss(self, x, log_dict=None):
         mean_z, log_var_z = self.model.encoding_parameters(x)
@@ -127,8 +128,7 @@ class AdaptiveVAETrainer(ModelTrainer):
         if log_dict is not None:
             log_dict['recon_loss'] += reconstruction_loss.detach() * x.shape[0]
             log_dict['latent_loss'] += latent_loss.detach() * x.shape[0]
-        beta = 2
-        return reconstruction_loss + beta * self.get_latent_loss_factor() * latent_loss
+        return reconstruction_loss + self.beta * self.get_latent_loss_factor() * latent_loss
 
     def get_latent_loss_factor(self):
         if self.epoch < self.no_latent_loss_epochs:
