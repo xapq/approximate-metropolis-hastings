@@ -51,8 +51,6 @@ class ModelTrainer:
         # Model trainer state
         self.epoch = 0
         self.logs = defaultdict(list)
-        self.train_loss_history = []
-        self.val_loss_history = []
 
     @abstractmethod
     def loss(self, x):
@@ -60,24 +58,30 @@ class ModelTrainer:
 
     def run_classic_epoch(self, train_loader, val_loader=None):
         train_loss = self.process_data_loader(train_loader, is_train=True)
-        self.log_data('train_loss', train_loss)
+        self.log_scalar('train_loss', train_loss)
         if val_loader is not None:
             val_loss = self.process_data_loader(val_loader, is_train=False)
-            self.log_data('val_loss', val_loss)
+            self.log_scalar('val_loss', val_loss)
         self._finish_epoch()
 
     # Calculate the loss on a training or validation set and possibly update model parameters
     def process_data_loader(self, data_loader, is_train=False):
+        log_prefix = 'train_' if is_train else 'val_'
+        log_dict = defaultdict(float)  # for accumulating information to log
         self.model.train(is_train)
         sum_losses = 0
         with torch.set_grad_enabled(is_train):
             for x in tqdm(data_loader):
                 x = x.to(self.model.device)
-                loss = self.loss(x)
+                loss = self.loss(x, log_dict)
                 if is_train:
                     self._step(loss)
                 sum_losses += loss.detach() * x.size(0)
-        return sum_losses.item() / len(data_loader.dataset)
+        epoch_loss = sum_losses.item() / len(data_loader.dataset)
+        self.log_scalar(log_prefix + 'loss', epoch_loss)
+        for value_name in log_dict:
+            self.log_scalar(log_prefix + value_name, log_dict[value_name].item() / len(data_loader.dataset))
+        return epoch_loss
 
     # Update epoch number, learning rate, loss function if needed
     def _finish_epoch(self):
@@ -94,7 +98,7 @@ class ModelTrainer:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
         self.optimizer.step()
 
-    def log_data(self, log_name, data):
+    def log_scalar(self, log_name, data):
         self.logs[log_name].append((self.epoch, data))
     
     def get_log(self, log_name, from_epoch=0):
@@ -110,30 +114,40 @@ class ModelTrainer:
 class AdaptiveVAETrainer(ModelTrainer):
     def __init__(self, *args,**kwargs):
         super().__init__(*args, **kwargs)
-        self.no_kl_penalty_epochs = kwargs.get("no_kl_penalty_epochs", 0)
-        self.kl_annealing_epochs = kwargs.get("kl_annealing_epochs", 1)
+        self.no_latent_loss_epochs = kwargs.get("no_latent_loss_epochs", 0)
+        self.loss_annealing_epochs = kwargs.get("loss_annealing_epochs", 1)
         self.model_log_likelihood = kwargs.get("model_log_likelihood")  # only needed for adaptive training
+        self.beta = kwargs.get("beta", 1.)  # extra weighting factor for latent space loss
 
-    def loss(self, x):
-        return torch.mean(self.elementwise_losses(x))
+    def loss(self, x, log_dict=None):
+        mean_z, log_var_z = self.model.encoding_parameters(x)
+        z = self.model.reparameterize(mean_z, log_var_z)
+        reconstruction_distribution = self.model.decoder_distribution(z)
+        reconstruction_loss = -reconstruction_distribution.log_prob(x).mean()
+        latent_loss = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1).mean()
+        if log_dict is not None:
+            log_dict['recon_loss'] += reconstruction_loss.detach() * x.shape[0]
+            log_dict['latent_loss'] += latent_loss.detach() * x.shape[0]
+        return reconstruction_loss + self.beta * self.get_latent_loss_factor() * latent_loss
 
+    def get_latent_loss_factor(self):
+        if self.epoch < self.no_latent_loss_epochs:
+            return 0.01
+        return min(1., (self.epoch - self.no_latent_loss_epochs + 1) / self.loss_annealing_epochs)
+
+    '''
     def elementwise_losses(self, x):
-        reconstruction_loss, kl_divergence = self.loss_components(x)
-        return reconstruction_loss + self.get_kl_loss_factor() * kl_divergence
+        reconstruction_loss, kl_loss = self.loss_components(x)
+        return reconstruction_loss + self.get_latent_loss_factor() * kl_loss
         
     def loss_components(self, x):
         mean_z, log_var_z = self.model.encoding_parameters(x)
         z = self.model.reparameterize(mean_z, log_var_z)
         reconstruction_distribution = self.model.decoder_distribution(z)
         reconstruction_loss = -reconstruction_distribution.log_prob(x)
-        kl_divergence = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1)
-        return reconstruction_loss, kl_divergence
-
-    def get_kl_loss_factor(self):
-        if self.epoch < self.no_kl_penalty_epochs:
-            return 0.01
-        return min(1., (self.epoch - self.no_kl_penalty_epochs + 1) / self.kl_annealing_epochs)
-
+        kl_loss = -0.5 * (1 + log_var_z - mean_z.pow(2) - log_var_z.exp()).sum(dim=1)
+        return reconstruction_loss, kl_loss
+    
     def sample_and_train(self, sample_size=128):
         model_samples = self.model.rsample((sample_size,))
         # P - target distribution, Q - model distribution
@@ -149,6 +163,7 @@ class AdaptiveVAETrainer(ModelTrainer):
         self.train_loss_history[self.epoch] = loss.item()
         self.step(loss)
         return model_samples
+    '''
 
 
 class AdaptiveFlowTrainer(ModelTrainer):
